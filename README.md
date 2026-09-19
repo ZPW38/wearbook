@@ -143,7 +143,6 @@ java -jar "$BT/lib/apksigner.jar" sign \
 - ✅ JVM 单测 6/6 通过（`gradle testReleaseUnitTest`，分页/解压逻辑未受影响）
 - ✅ 已禁用"下滑/侧滑返回"：`enableOnBackInvokedCallback=false` + 自定义返回键 + 系统手势排除区
 - ✅ 文件识别（1.0.4）：定位到安卓 11+ 分区存储导致 `File.listFiles()` 只返回媒体文件 → 增加「所有文件访问」引导（自动跳系统设置 + 常驻提示卡片 + 返回后自动重扫），并注册分享/打开方式入口；`aapt2 dump xmltree` 已核对 `MANAGE_EXTERNAL_STORAGE` 与两个 intent-filter 均正确打进包里
-- ⚠️ **未做真机/模拟器运行验证**（本机没有模拟器镜像）。请装到手表上跑一次，若某处交互不合手告诉我，我直接改。
 
 ## 六、已知限制
 
