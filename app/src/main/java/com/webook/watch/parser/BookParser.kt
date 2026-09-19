@@ -24,13 +24,34 @@ val SUPPORTED_EXT = listOf("txt", "epub", "mobi", "azw", "azw3", "html", "htm")
 
 object BookParser {
 
-    /** 按扩展名分派 */
+    /**
+     * 非 epub 格式要把整份文件读进内存（txt/mobi/html 都是全量解码），
+     * 手表堆往往只有 96MB，所以调用方要给体积上限。
+     * 16MB 的纯文本约等于 600 万汉字，正常小说远用不到；再大就让它拆包。
+     */
+    const val MAX_IN_MEMORY_BYTES = 16L * 1024 * 1024
+
+    /** 单个章节条目超过这个大小就跳过（正常 XHTML 章节几十 KB，超大的多半是别的东西） */
+    private const val MAX_CHAPTER_ENTRY = 4L * 1024 * 1024
+
+    /** 全部正文的字符数上限（8M 字符 ≈ 16MB），防止超多章节的书把内存吃光 */
+    private const val MAX_TOTAL_CHARS = 8 * 1024 * 1024
+
+    /** 封面图的原始字节上限 */
+    private const val MAX_COVER_ENTRY = 6L * 1024 * 1024
+
+    /**
+     * 按扩展名分派。
+     * ⚠️ epub 必须**提前返回**：它用 ZipFile 逐条读取，绝不需要整份文件；
+     * 之前这里先执行了 `bytes ?: file.readBytes()`，结果一本 171MB 的 epub
+     * 在 96MB 堆的手表上直接 OutOfMemoryError 闪退（用户实测）。
+     */
     fun parse(file: File, name: String, bytes: ByteArray? = null): ParsedBook {
         val ext = name.substringAfterLast('.', "").lowercase()
+        if (ext == "epub") return epubToBook(file, name)
         val data = bytes ?: file.readBytes()
         return when (ext) {
             "txt" -> txtToBook(data, name)
-            "epub" -> epubToBook(file, name)
             "mobi", "azw", "azw3" -> MobiParser.parse(data, name)
             "html", "htm" -> htmlToBook(data, name)
             else -> throw IllegalArgumentException("不支持的格式：.$ext")
@@ -105,26 +126,57 @@ object BookParser {
             val title = opf.title.ifBlank { name.substringBeforeLast('.') }
 
             val chapters = mutableListOf<Chapter>()
+            var totalChars = 0
+            var skippedLarge = 0
             for (href in opf.spine) {
+                if (totalChars > MAX_TOTAL_CHARS) break
                 val entry = zip.getEntry(resolve(base, href)) ?: continue
+                // 超大的条目直接跳过：读进来就是一次几十 MB 的分配，手表扛不住
+                if (entry.size > MAX_CHAPTER_ENTRY) { skippedLarge++; continue }
                 val paras = runCatching {
                     htmlToParagraphs(decode(zip.getInputStream(entry).readBytes()))
                 }.getOrDefault(emptyList())
-                if (paras.isNotEmpty()) chapters.add(Chapter(paras.first().take(24), paras))
+                if (paras.isNotEmpty()) {
+                    totalChars += paras.sumOf { it.length }
+                    chapters.add(Chapter(paras.first().take(24), paras))
+                }
             }
-            if (chapters.isEmpty()) throw IllegalArgumentException("EPUB 内没有可读正文")
+            if (chapters.isEmpty()) {
+                throw IllegalArgumentException(
+                    if (skippedLarge > 0) "EPUB 里有超大章节文件（$skippedLarge 个，每个超过 4MB），手表内存放不下"
+                    else "EPUB 内没有可读正文"
+                )
+            }
+            if (totalChars > MAX_TOTAL_CHARS) {
+                // 只收下前面的正文，别为了完整的书把内存撑爆
+                while (chapters.size > 1 && chapters.sumOf { c -> c.paragraphs.sumOf { it.length } } > MAX_TOTAL_CHARS) {
+                    chapters.removeAt(chapters.lastIndex)
+                }
+            }
 
             val cover = opf.coverHref?.let { href ->
-                zip.getEntry(resolve(base, href))?.let { e ->
-                    runCatching {
-                        val bmp = BitmapFactory.decodeStream(zip.getInputStream(e)) ?: return@let null
-                        scaleCover(bmp)
-                    }.getOrNull()
-                }
+                zip.getEntry(resolve(base, href))?.let { e -> coverBitmap(zip, e) }
             }
             ParsedBook(title, opf.author, "epub", chapters, cover)
         }
     }
+
+    /**
+     * 解封面：先只读尺寸，再按需缩放解码。
+     * 一本大 EPUB 的封面可能是几千万像素的大图，直接 decodeStream 一样会 OOM。
+     */
+    private fun coverBitmap(zip: ZipFile, entry: java.util.zip.ZipEntry): Bitmap? = runCatching {
+        if (entry.size > MAX_COVER_ENTRY || entry.size <= 0) return@runCatching null
+        val raw = zip.getInputStream(entry).readBytes()
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(raw, 0, raw.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= 192 && bounds.outHeight / (sample * 2) >= 288) sample *= 2
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        val bmp = BitmapFactory.decodeByteArray(raw, 0, raw.size, opts) ?: return@runCatching null
+        scaleCover(bmp)
+    }.getOrNull()
 
     private fun scaleCover(src: Bitmap): Bitmap {
         val r = minOf(96f / src.width, 144f / src.height, 1f)

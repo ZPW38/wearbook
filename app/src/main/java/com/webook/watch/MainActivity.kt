@@ -489,11 +489,17 @@ class MainActivity : ComponentActivity() {
         storageBlocked = dirStack.size == 1 && entries.isEmpty()
     }
 
-    /** 解析并入库；epub 需要真实文件（ZipFile），其它格式走字节数组 */
-    private suspend fun parseAndStore(name: String, bytes: ByteArray, epubSrc: File?): ParsedBook {
-        val parsed = if (name.endsWith(".epub", true) && epubSrc != null) BookParser.parse(epubSrc, name)
-        else BookParser.parse(File(""), name, bytes)
-        store.add(parsed.title, parsed.author, parsed.fmt, bytes.size.toLong(), parsed.chapters, parsed.cover)
+    /**
+     * 解析并入库。
+     * epub 只需要文件本身（走 ZipFile 逐章读），所以 bytes 传 null —— 千万别为了 epub 整读文件，
+     * 一本 171MB 的 epub 会把 96MB 堆的手表直接打崩（用户实测 OOM 闪退）。
+     */
+    private suspend fun parseAndStore(name: String, bytes: ByteArray?, epubSrc: File?): ParsedBook {
+        val sizeBytes = epubSrc?.length() ?: bytes?.size?.toLong() ?: 0L
+        val parsed =
+            if (name.endsWith(".epub", true) && epubSrc != null) BookParser.epubToBook(epubSrc, name)
+            else BookParser.parse(File(""), name, bytes ?: ByteArray(0))
+        store.add(parsed.title, parsed.author, parsed.fmt, sizeBytes, parsed.chapters, parsed.cover)
         return parsed
     }
 
@@ -508,11 +514,28 @@ class MainActivity : ComponentActivity() {
     private fun importFile(file: File) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                finishImport(parseAndStore(file.name, file.readBytes(), file))
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { toast("导入失败：${e.message}") }
+                val isEpub = file.name.endsWith(".epub", true)
+                if (!isEpub && file.length() > BookParser.MAX_IN_MEMORY_BYTES) {
+                    withContext(Dispatchers.Main) {
+                        toast("这本书 ${file.length() / 1048576} MB，超过上限 ${BookParser.MAX_IN_MEMORY_BYTES / 1048576} MB —— 手表内存放不下")
+                    }
+                    return@launch
+                }
+                // epub 不需要字节数组（ZipFile 逐章读），传 null 省掉一整份文件的内存
+                val bytes = if (isEpub) null else file.readBytes()
+                finishImport(parseAndStore(file.name, bytes, file))
+            } catch (e: Throwable) {
+                // 连 OutOfMemoryError 一起接住：宁可提示一句，也不要整个 App 闪退
+                withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
             }
         }
+    }
+
+    /** 把异常翻译成用户看得懂的一句 */
+    private fun friendlyError(e: Throwable): String = when (e) {
+        is OutOfMemoryError -> "内存不足，这本书太大了"
+        is StackOverflowError -> "文件结构太复杂，解析失败"
+        else -> e.message ?: e.javaClass.simpleName
     }
 
     /** 处理别的 App「分享 / 打开方式」进来的 URI（不需要任何存储权限） */
@@ -537,12 +560,20 @@ class MainActivity : ComponentActivity() {
                     } != null
                 }.getOrDefault(false)
                 if (!ok || !tmp.exists() || tmp.length() == 0L) throw IllegalStateException("读不到该文件")
-                val parsed = parseAndStore(name, tmp.readBytes(), tmp)
+                val isEpub = name.endsWith(".epub", true)
+                if (!isEpub && tmp.length() > BookParser.MAX_IN_MEMORY_BYTES) {
+                    tmp.delete()
+                    withContext(Dispatchers.Main) {
+                        toast("这本书 ${tmp.length() / 1048576} MB，超过上限 ${BookParser.MAX_IN_MEMORY_BYTES / 1048576} MB —— 手表内存放不下")
+                    }
+                    return@launch
+                }
+                val parsed = parseAndStore(name, if (isEpub) null else tmp.readBytes(), tmp)
                 tmp.delete()
                 finishImport(parsed)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 tmp.delete()
-                withContext(Dispatchers.Main) { toast("导入失败：${e.message}") }
+                withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
             }
         }
     }
