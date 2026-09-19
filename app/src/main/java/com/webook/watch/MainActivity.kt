@@ -267,6 +267,7 @@ class MainActivity : ComponentActivity() {
                                 ReaderScreen(
                                     title = meta.title,
                                     chapters = chapters,
+                                    bookPath = meta.source,
                                     settings = settings,
                                     speaker = speaker,
                                     dark = dark,
@@ -554,7 +555,9 @@ class MainActivity : ComponentActivity() {
             it.title == parsed.title && it.fmt == parsed.fmt && it.chapterCount == parsed.chapters.size
         }
         if (dup) return parsed to true
-        store.add(parsed.title, parsed.author, parsed.fmt, sizeBytes, parsed.chapters, parsed.cover)
+        // epub 记下原文件路径：插图不预先抽取，阅读时按需从这里读
+        val source = if (parsed.fmt == "epub") epubSrc?.absolutePath else null
+        store.add(parsed.title, parsed.author, parsed.fmt, sizeBytes, parsed.chapters, parsed.cover, source)
         return parsed to false
     }
 
@@ -630,8 +633,17 @@ class MainActivity : ComponentActivity() {
                     }
                     return@launch
                 }
-                val (parsed, dup) = parseAndStore(name, if (isEpub) null else tmp.readBytes(), tmp)
-                tmp.delete()
+                // epub 的插图要在阅读时从原 zip 里按需读，所以分享进来的这份得留下（存到私有目录）
+                val srcFile: File = if (isEpub) {
+                    val keep = File(keepDir(), name.substringAfterLast('/').substringAfterLast('\\'))
+                    runCatching {
+                        if (keep.exists()) keep.delete()
+                        tmp.renameTo(keep)
+                    }
+                    if (keep.exists()) keep else tmp
+                } else tmp
+                val (parsed, dup) = parseAndStore(name, if (isEpub) null else tmp.readBytes(), srcFile)
+                if (!isEpub) tmp.delete()
                 finishImport(parsed, dup)
             } catch (e: Throwable) {
                 tmp.delete()
@@ -640,6 +652,13 @@ class MainActivity : ComponentActivity() {
                 withContext(Dispatchers.Main) { importing = null }
             }
         }
+    }
+
+    /** 分享导入进来的 epub 留档目录（外部私有目录，不需要任何权限） */
+    private fun keepDir(): File {
+        val d = File(appBooksDir(), "books")
+        if (!d.exists()) d.mkdirs()
+        return d
     }
 
     /** 取 content:// 的真实文件名 */

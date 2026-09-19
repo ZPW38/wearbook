@@ -15,12 +15,12 @@
 
 | 文件 | 说明 |
 |---|---|
-| `wearbook-watch-1.0.17.apk`（约 1.08 MB） | release 包，已开 R8 压缩与资源裁剪，**v1+v2 双签名、含 32 位 armeabi-v7a**，可直接安装 |
+| `wearbook-watch-1.0.18.apk`（约 1.08 MB） | release 包，已开 R8 压缩与资源裁剪，**v1+v2 双签名、含 32 位 armeabi-v7a**，可直接安装 |
 
 安装方式（任选其一）：
 
 ```bash
-adb install -r wearbook-watch-1.0.17.apk
+adb install -r wearbook-watch-1.0.18.apk
 ```
 
 - 或把 APK 拷进手表存储，用手表自带的文件管理器点击安装；
@@ -56,6 +56,12 @@ adb install -r wearbook-watch-1.0.17.apk
 - 「界面」= 排版：字号 14–26px、行距 1.3–2.2、日间/夜间各 4 套底色（纸白/米黄/淡绿/浅灰 · 纯黑/深灰/深蓝/深棕）、文字两端对齐、共用布局开关（关掉后夜间单独记一套字号行距）
 - 「设置」= 其它：屏幕方向（跟随系统/竖屏/横屏）、自动翻页秒数、阅读时常亮、隐藏状态栏、音量键翻页、点击屏幕两侧翻页、翻页震动、圆屏安全边距、显示亮度控件
 - 任意菜单按钮**长按**会弹出该按钮的功能说明；首次进入阅读页也会给一次操作提示
+- **EPUB 正文里的插图现在会显示了**（1.0.18）：之前解析器只提取文字，插图被整条跳过（一本 313MB 的书里 172MB 全是插图）。做法是**不预抽取、不占额外空间** ——
+  - 解析时把 `<img>` 记录成正文流里的一个「插图段落」（含图片在压缩包内的路径与宽高，宽高由 `inJustDecodeBounds` 只读文件头得到）；
+  - `BookMeta` 增加 `source` 记住 epub 原文件路径；阅读翻到哪一页，才去那个 zip 里读那一两张图，按屏幕宽度 `inSampleSize` 降采样、`RGB_565` 解码，再用一个最多 4 张的 LRU 缓存住；
+  - 排版层 `PageLine` 支持「图片行」（自带高度，等比缩放、最多占版面高度 62%），翻页与滑动两种模式都能显示；
+  - 原文件被删/移走时插图显示占位框，正文不受影响；分享导入的 epub 会留档到私有目录以保住插图。
+  - ⌨️ 提示：升级前导入的旧书没有记录原文件路径，**删掉重新导入一次**插图才会出现。
 - **导入时「点了没反应」→ 同一本书被导入好几遍**（1.0.17）：一本 313MB / 1019 章的 EPUB 解析要十几秒，期间界面毫无提示，用户以为没反应就连点几下 —— 每点一次都真在后台跑一遍导入，于是书架里出现 3 本一模一样的书。现在：
   - 导入时盖一层**进度遮罩**（转圈 + 书名 + 「大文件可能要十几秒」），点下去立刻有反馈；
   - 导入期间**忽略新的导入请求**（提示「正在导入，请稍候」），不再并发解析；
@@ -131,7 +137,7 @@ BT="$ANDROID_HOME/build-tools/34.0.0"
 java -jar "$BT/lib/apksigner.jar" sign \
   --v1-signing-enabled=true --v2-signing-enabled=true --v3-signing-enabled=false \
   --ks "$KS" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android \
-  --out wearbook-watch-1.0.17.apk \
+  --out wearbook-watch-1.0.18.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 

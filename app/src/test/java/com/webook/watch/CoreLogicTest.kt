@@ -1,5 +1,8 @@
 package com.webook.watch
 
+import com.webook.watch.data.ImageRef
+import com.webook.watch.data.imageParagraph
+import com.webook.watch.data.parseImagePara
 import com.webook.watch.parser.PalmDoc
 import com.webook.watch.text.PageLine
 import com.webook.watch.text.PagePacker
@@ -67,5 +70,48 @@ class CoreLogicTest {
         // 0x02 后跟 "AB"，(0x80,0x10) = 距离 2、长度 3 → "ABABA"
         val out = PalmDoc.decompress(byteArrayOf(0x02, 65, 66, 0x80.toByte(), 0x10))
         assertEquals("ABABA", String(out, Charsets.US_ASCII))
+    }
+
+    /* ---------------- 插图行（1.0.18） ---------------- */
+
+    @Test
+    fun `插图段落能被识别`() {
+        val p = imageParagraph("OEBPS/images/a.jpg", 800, 600)
+        val ref = parseImagePara(p)!!
+        assertEquals("OEBPS/images/a.jpg", ref.path)
+        assertEquals(800, ref.w)
+        assertEquals(600, ref.h)
+        // 普通文字段落不该被误判成图片
+        assertEquals(null, parseImagePara("普通文字段落"))
+        assertEquals(null, parseImagePara(""))
+    }
+
+    @Test
+    fun `插图行按自己的高度参与分页`() {
+        // 页高 100、行高 30：一张 90 高的图 + 上下各一行文字 → 恰好切成 3 页
+        val ls = listOf(
+            PageLine("文字", 0f, true),
+            PageLine("", 0f, true, 1, ImageRef("a.jpg", 800, 600), 100f, 90f),
+            PageLine("文字2", 0f, true, 2)
+        )
+        val pages = PagePacker.pack(ls, pageHeight = 100f, lineHeight = 30f, paraSpacing = 0f)
+        assertEquals(3, pages.size)
+        assertEquals("中间那页只放那张图", 1, pages[1].count)
+        assertEquals(1, pages[1].start)
+    }
+
+    @Test
+    fun `插图不会把页面撑破`() {
+        val ls = listOf(
+            PageLine("", 0f, true, 0, ImageRef("a.jpg", 800, 600), 100f, 90f),
+            PageLine("", 0f, true, 1, ImageRef("b.jpg", 800, 600), 100f, 90f),
+            PageLine("文字", 0f, false, 2)
+        )
+        val pages = PagePacker.pack(ls, 100f, 30f, 0f)
+        for (p in pages) {
+            var h = 0f
+            for (i in p.start until p.end) h += ls[i].height(30f)
+            assertTrue("页面高度 $h 超出 100", h <= 100f)
+        }
     }
 }

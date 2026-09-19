@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Xml
 import com.webook.watch.data.Chapter
+import com.webook.watch.data.IMG_MARK
+import com.webook.watch.data.parseImagePara
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.io.InputStream
@@ -40,6 +42,9 @@ object BookParser {
     /** 封面图的原始字节上限 */
     private const val MAX_COVER_ENTRY = 6L * 1024 * 1024
 
+    /** 正文插图单张的字节上限（只读文件头拿尺寸，不解码，所以可以放宽） */
+    private const val MAX_IMAGE_ENTRY = 8L * 1024 * 1024
+
     /**
      * 按扩展名分派。
      * ⚠️ epub 必须**提前返回**：它用 ZipFile 逐条读取，绝不需要整份文件；
@@ -71,14 +76,28 @@ object BookParser {
     }
 
     /* ---------------- HTML -> 段落 ---------------- */
-    fun htmlToParagraphs(html: String): List<String> {
+    /**
+     * @param imgResolver 传入时，会把 `<img src="...">` 变成一个独立的「插图段落」
+     *        （应返回 "zip内路径\u0000宽\u0000高"；返回 null 表示这张图跳过）。
+     *        传 null 就只取文字（TXT/HTML 文件用）。
+     */
+    fun htmlToParagraphs(html: String, imgResolver: ((String) -> String?)? = null): List<String> {
         var s = html
         s = Regex("(?is)<(script|style|head|nav)[^>]*>.*?</\\1>").replace(s, " ")
+        if (imgResolver != null) {
+            // 先把图片换成标记段落（前后补空行，保证它自己独立成段）
+            s = Regex("(?is)<img\\b[^>]*>").replace(s) { m ->
+                val src = Regex("(?i)src\\s*=\\s*[\"']([^\"']+)[\"']").find(m.value)?.groupValues?.get(1)
+                val payload = src?.let { imgResolver(it) }
+                if (payload == null) "\n\n" else "\n\n$IMG_MARK$payload\n\n"
+            }
+        }
         s = Regex("(?i)</(p|div|h[1-6]|li|blockquote|tr)>").replace(s, "\n\n")
         s = Regex("(?i)<br\\s*/?>").replace(s, "\n")
         s = Regex("<[^>]+>").replace(s, "")
         s = s.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<")
             .replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
+        // 插图段里含 \u0000，trim 动不到它；按行切分后它自己就是一段
         return s.lineSequence().map { it.trim() }.filter { it.isNotBlank() }.toList()
     }
 
@@ -130,15 +149,20 @@ object BookParser {
             var skippedLarge = 0
             for (href in opf.spine) {
                 if (totalChars > MAX_TOTAL_CHARS) break
-                val entry = zip.getEntry(resolve(base, href)) ?: continue
+                val chapterPath = resolve(base, href)
+                val entry = zip.getEntry(chapterPath) ?: continue
                 // 超大的条目直接跳过：读进来就是一次几十 MB 的分配，手表扛不住
                 if (entry.size > MAX_CHAPTER_ENTRY) { skippedLarge++; continue }
+                val chapterDir = chapterPath.substringBeforeLast('/', "")
                 val paras = runCatching {
-                    htmlToParagraphs(decode(zip.getInputStream(entry).readBytes()))
+                    htmlToParagraphs(decode(zip.getInputStream(entry).readBytes())) { src ->
+                        imagePayload(zip, chapterDir, src)
+                    }
                 }.getOrDefault(emptyList())
                 if (paras.isNotEmpty()) {
                     totalChars += paras.sumOf { it.length }
-                    chapters.add(Chapter(paras.first().take(24), paras))
+                    // 标题取第一个「非插图」段落，否则标题会变成一串图片标记
+                    chapters.add(Chapter(paras.firstOrNull { parseImagePara(it) == null }?.take(24) ?: "", paras))
                 }
             }
             if (chapters.isEmpty()) {
@@ -177,6 +201,29 @@ object BookParser {
         val bmp = BitmapFactory.decodeByteArray(raw, 0, raw.size, opts) ?: return@runCatching null
         scaleCover(bmp)
     }.getOrNull()
+
+    /**
+     * 把 XHTML 里的 `src` 解析成压缩包内路径，并读一下图片尺寸（只读文件头，不整张解码）。
+     * 返回 "路径\u0000宽\u0000高"；不是图片/读不出尺寸就返回 null（这张图就跳过）。
+     * base 必须是**该 XHTML 所在目录**——src 是相对章节文件而不是 OPF 的。
+     */
+    private fun imagePayload(zip: ZipFile, base: String, src: String): String? {
+        val raw = src.trim()
+        if (raw.isEmpty() || raw.startsWith("data:") || raw.startsWith("http:", true) || raw.startsWith("https:", true)) return null
+        val path = resolve(base, raw)
+        val entry = runCatching { zip.getEntry(path) }.getOrNull() ?: return null
+        if (entry.size <= 0 || entry.size > MAX_IMAGE_ENTRY) return null
+        var w = 0
+        var h = 0
+        runCatching {
+            val opt = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            zip.getInputStream(entry).use { BitmapFactory.decodeStream(it, null, opt) }
+            w = opt.outWidth
+            h = opt.outHeight
+        }
+        if (w <= 0 || h <= 0) return null
+        return "$path\u0000$w\u0000$h"
+    }
 
     private fun scaleCover(src: Bitmap): Bitmap {
         val r = minOf(96f / src.width, 144f / src.height, 1f)

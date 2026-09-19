@@ -38,7 +38,8 @@ class LibraryStore(private val ctx: Context) {
                         chapterCount = o.optInt("n", 0),
                         size = o.optLong("size", 0),
                         addedAt = o.optLong("addedAt", 0),
-                        cover = o.optString("cover", "").ifBlank { null }
+                        cover = o.optString("cover", "").ifBlank { null },
+                        source = o.optString("source", "").ifBlank { null }
                     )
                 }.getOrNull()
             }.sortedByDescending { it.addedAt }
@@ -52,13 +53,17 @@ class LibraryStore(private val ctx: Context) {
                 put("id", b.id); put("title", b.title); put("author", b.author)
                 put("fmt", b.fmt); put("n", b.chapterCount); put("size", b.size)
                 put("addedAt", b.addedAt); put("cover", b.cover ?: "")
+                put("source", b.source ?: "")
             })
         }
         indexFile.writeText(arr.toString())
     }
 
-    /** 新增一本（返回 id） */
-    fun add(title: String, author: String, fmt: String, size: Long, chapters: List<Chapter>, cover: Bitmap? = null): BookMeta {
+    /** 新增一本（返回 id）。source = 原文件路径（epub 的插图按需从它里面读） */
+    fun add(
+        title: String, author: String, fmt: String, size: Long,
+        chapters: List<Chapter>, cover: Bitmap? = null, source: String? = null
+    ): BookMeta {
         val id = System.currentTimeMillis().toString()
         var coverName: String? = null
         if (cover != null) {
@@ -69,7 +74,7 @@ class LibraryStore(private val ctx: Context) {
                 }
             }
         }
-        val meta = BookMeta(id, title, author, fmt, chapters.size, size, System.currentTimeMillis(), coverName)
+        val meta = BookMeta(id, title, author, fmt, chapters.size, size, System.currentTimeMillis(), coverName, source)
         // 逐章写入：上千章的书如果先拼成一个巨大字符串，会连续触发阻塞式 GC，手表上界面会卡住
         File(chapterDir, "$id.json").bufferedWriter().use { w -> chaptersToJson(chapters, w) }
         save(list() + meta)

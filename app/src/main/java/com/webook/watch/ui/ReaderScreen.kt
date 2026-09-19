@@ -42,6 +42,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -64,6 +65,7 @@ import com.webook.watch.data.Bookmark
 import com.webook.watch.data.Chapter
 import com.webook.watch.data.SearchHit
 import com.webook.watch.data.Settings
+import com.webook.watch.data.parseImagePara
 import com.webook.watch.text.Page
 import com.webook.watch.text.PageLine
 import com.webook.watch.text.PagePacker
@@ -82,6 +84,8 @@ private enum class Panel { NONE, TOC, SEARCH, TYPO, OTHER, SPEAK }
 fun ReaderScreen(
     title: String,
     chapters: List<Chapter>,
+    /** epub 原文件路径：插图要按需从它里面读（为 null 时插图显示占位框） */
+    bookPath: String? = null,
     settings: Settings,
     speaker: Speaker,
     dark: Boolean,
@@ -146,11 +150,35 @@ fun ReaderScreen(
         val padY = with(density) { 12.dp.toPx() }
         val textW = wPx - padX * 2
 
+        // 插图：zip 内路径 -> 解码好的位图（值是 null 表示文件不在或解码失败，画占位框）
+        val imgCache = remember { mutableStateMapOf<String, android.graphics.Bitmap?>() }
+        val imagePaint = remember { android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG) }
+        // 一张插图最多占版面高度的 62%，再长就等比缩小，免得一整页只有一张图
+        val maxImgH = (hPx - padY * 2) * 0.62f
+
+        // 预取当前页用到的插图（翻页模式一页最多一两张；滑动模式看当前滚动位置附近）
+        LaunchedEffect(pageIdx, lines, bookPath, textW, scrollMode, lineAtTop / 40) {
+            val range = if (scrollMode) {
+                (lineAtTop - 40).coerceAtLeast(0)..(lineAtTop + 120).coerceAtMost(lines.size - 1)
+            } else {
+                val p = pages.getOrNull(pageIdx) ?: return@LaunchedEffect
+                p.start..(p.end - 1).coerceAtLeast(p.start)
+            }
+            for (i in range) {
+                val ref = lines.getOrNull(i)?.img ?: continue
+                if (imgCache.containsKey(ref.path)) continue
+                val b = withContext(Dispatchers.IO) {
+                    EpubImages.load(bookPath, ref, lines[i].imgW.toInt())
+                }
+                imgCache[ref.path] = b
+            }
+        }
+
         // 排版（章节/字号/尺寸变化时重算）
         LaunchedEffect(chapterIdx, fontSizePx, settings.lineSpacingOf(dark), wPx, hPx, scrollMode) {
             val ch = chapters.getOrNull(chapterIdx) ?: return@LaunchedEffect
             launch {
-                val ls = LineBreaker.layout(ch.paragraphs, paint, textW, paint.textSize * 2)
+                val ls = LineBreaker.layout(ch.paragraphs, paint, textW, paint.textSize * 2, maxImgH)
                 val ps = PagePacker.pack(ls, hPx - padY * 2, lineHeightPx, paraGapPx)
                 lines = ls
                 pages = ps
@@ -215,6 +243,8 @@ fun ReaderScreen(
                 padY = padY,
                 textW = textW,
                 justify = justify,
+                imgCache = imgCache,
+                imagePaint = imagePaint,
                 scroller = scroller,
                 onLineAtTop = { ln ->
                     lineAtTop = ln
@@ -242,6 +272,15 @@ fun ReaderScreen(
                     var y = -paint.fontMetrics.ascent
                     for (i in page.start until page.end) {
                         val ln = lines.getOrNull(i) ?: break
+                        val ref = ln.img
+                        if (ref != null) {   // 插图行：图上边 = 该行行顶
+                            drawInlineImage(
+                                canvas, imgCache[ref.path], ln, imagePaint,
+                                padX, padY + y + paint.fontMetrics.ascent, textW
+                            )
+                            y += ln.height(lineHeightPx)
+                            continue
+                        }
                         val x = if (i == page.start && !ln.paraStart) 0f else ln.indent
                         val lastOfPara = (i + 1 >= lines.size) || lines[i + 1].paraStart
                         drawLine(canvas, paint, ln.text, padX + x, padY + y, textW, justify && !lastOfPara)
@@ -406,6 +445,7 @@ fun ReaderScreen(
                                 val ch = chapters[ci]
                                 for (pi in ch.paragraphs.indices) {
                                     val p = ch.paragraphs[pi]
+                                    if (parseImagePara(p) != null) continue   // 插图段落没有可搜的文字
                                     val at = p.indexOf(q)
                                     if (at >= 0) {
                                         val s = (at - 12).coerceAtLeast(0)
@@ -453,6 +493,48 @@ fun ReaderScreen(
     }
 }
 
+/** 插图行的占位框画笔（图还没解码好 / 原文件不在时用） */
+private val imgPlaceholderFill by lazy {
+    android.graphics.Paint().apply {
+        color = 0x1F888888
+        style = android.graphics.Paint.Style.FILL
+    }
+}
+private val imgPlaceholderStroke by lazy {
+    android.graphics.Paint().apply {
+        color = 0x55888888
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
+}
+
+/**
+ * 画一行插图：按排版时算好的尺寸水平居中。
+ * 位图还没加载好或者原文件不在了，就画一个淡框占位，避免这一行变成莫名其妙的空白。
+ */
+private fun drawInlineImage(
+    canvas: android.graphics.Canvas,
+    bmp: android.graphics.Bitmap?,
+    line: PageLine,
+    paint: android.graphics.Paint,
+    padX: Float,
+    top: Float,
+    contentW: Float
+) {
+    val w = line.imgW
+    val h = line.imgH
+    if (w <= 0f || h <= 0f) return
+    val left = padX + (contentW - w) / 2f
+    if (bmp != null) {
+        canvas.drawBitmap(bmp, null, android.graphics.RectF(left, top, left + w, top + h), paint)
+    } else {
+        val r = android.graphics.RectF(left, top, left + w, top + h)
+        canvas.drawRoundRect(r, 10f, 10f, imgPlaceholderFill)
+        canvas.drawRoundRect(r, 10f, 10f, imgPlaceholderStroke)
+    }
+}
+
 /** 逐字绘制实现两端对齐；不需要对齐时整行一次画完 */
 private fun drawLine(
     canvas: android.graphics.Canvas,
@@ -497,6 +579,8 @@ private fun ScrollBody(
     padY: Float,
     textW: Float,
     justify: Boolean,
+    imgCache: Map<String, android.graphics.Bitmap?>,
+    imagePaint: android.graphics.Paint,
     scroller: LazyListState,
     onLineAtTop: (Int) -> Unit,
     tapPaging: Boolean,
@@ -536,7 +620,7 @@ private fun ScrollBody(
                 var h = 0f
                 chunk.forEachIndexed { j, ln ->
                     if (startGlobal + j > 0 && ln.paraStart) h += paraGapPx
-                    h += lineHeightPx
+                    h += ln.height(lineHeightPx)
                 }
                 Box(
                     Modifier
@@ -549,6 +633,15 @@ private fun ScrollBody(
                                 chunk.forEachIndexed { j, ln ->
                                     val gi = startGlobal + j
                                     if (gi > 0 && ln.paraStart) y += paraGapPx
+                                    val ref = ln.img
+                                    if (ref != null) {
+                                        drawInlineImage(
+                                            canvas, imgCache[ref.path], ln, imagePaint,
+                                            padX, y + paint.fontMetrics.ascent, textW
+                                        )
+                                        y += ln.height(lineHeightPx)
+                                        return@forEachIndexed
+                                    }
                                     val x = if (ln.paraStart) ln.indent else 0f
                                     val lastOfPara = (gi + 1 >= lines.size) || lines[gi + 1].paraStart
                                     drawLine(canvas, paint, ln.text, padX + x, y, textW, justify && !lastOfPara)
