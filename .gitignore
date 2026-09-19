@@ -1,0 +1,25 @@
+# ---- 构建产物（不要提交）----
+.gradle/
+.kotlin/
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.iml
+.idea/
+.DS_Store
+
+# ---- 本机路径：local.properties 里是自己电脑的 SDK 路径，别人用不着 ----
+local.properties
+
+# ---- 签名与安装包：一律不进仓库 ----
+# 尤其注意：正式的 release keystore 绝对不能提交，泄漏 = 别人能冒名发布你的更新
+*.jks
+*.keystore
+*.apk
+*.aab
+*.idsig
+
+# ---- 日志 ----
+*.log

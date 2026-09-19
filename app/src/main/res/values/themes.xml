@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.WearBook" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <!-- 手表系统（Wear OS）自带的「右滑返回 / 侧滑关闭」：关掉，避免阅读时误退出。
+             这是手表固件层的手势，不走 Android 的返回手势，光设手势排除区拦不住。
+             普通安卓手机不认识这个属性，会被忽略，无副作用。 -->
+        <item name="android:windowSwipeToDismiss">false</item>
+    </style>
+</resources>

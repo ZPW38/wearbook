@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M440 840 v-240 h80 v80 h320 v80 H520 v80 h-80 Z m-320 -80 v-80 h240 v80 H120 Z m160 -160 v-80 H120 v-80 h160 v-80 h80 v240 h-80 Z m160 -80 v-80 h400 v80 H440 Z m160 -160 v-240 h80 v80 h160 v80 H680 v80 h-80 Z m-480 -80 v-80 h400 v80 H120 Z" />
+</vector>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="960"
+    android:viewportHeight="960">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M585 760 q-24.75 0 -42.37 -17.63 Q525 724.75 525 700 v-440 q0 -24.75 17.63 -42.38 Q560.25 200 585 200 h115 q24.75 0 42.38 17.62 Q760 235.25 760 260 v440 q0 24.75 -17.62 42.37 Q724.75 760 700 760 H585 Z m-325 0 q-24.75 0 -42.37 -17.63 Q200 724.75 200 700 v-440 q0 -24.75 17.63 -42.38 Q235.25 200 260 200 h115 q24.75 0 42.38 17.62 Q435 235.25 435 260 v440 q0 24.75 -17.62 42.37 Q399.75 760 375 760 H260 Z m325 -60 h115 v-440 H585 v440 Z m-325 0 h115 v-440 H260 v440 Z m0 -440 v440 -440 Z m325 0 v440 -440 Z" />
+</vector>
