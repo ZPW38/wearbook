@@ -1,6 +1,9 @@
 package com.webook.watch.data
 
 import android.content.Context
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.setValue
 
 /**
  * 阅读设置（SharedPreferences）
@@ -11,6 +14,16 @@ import android.content.Context
 class Settings(ctx: Context) {
 
     private val sp = ctx.getSharedPreferences("wearbook", Context.MODE_PRIVATE)
+
+    /**
+     * 设置修订号：每次改设置 +1。
+     *
+     * 界面里读一下 `settings.rev` 就等于"订阅了设置变化"。不加这个的话，Compose 会把
+     * 参数没变的 composable 直接跳过重组（设置值本身存在普通对象里、不是 Compose 状态），
+     * 于是出现「点了开关状态不更新，退出界面再进来才正常」的怪毛病。
+     */
+    var rev by mutableIntStateOf(0)
+        internal set
 
     var fontSize: Float
         get() = sp.getFloat("fs", 18f)

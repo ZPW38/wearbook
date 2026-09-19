@@ -70,7 +70,11 @@ class MainActivity : ComponentActivity() {
     private lateinit var settings: Settings
     /** 设置版本号：每次改设置 +1，用来驱动 Compose 重组（设置对象本身是不可变引用） */
     private var settingsVersion by mutableIntStateOf(0)
-    private fun mutate(block: Settings.() -> Unit) { settings.block(); settingsVersion++ }
+    private fun mutate(block: Settings.() -> Unit) {
+        settings.block()
+        settings.rev++           // 通知深层界面重新读取设置（否则 Compose 会跳过重组）
+        settingsVersion++
+    }
 
     private var screen by mutableStateOf("library")
     private var books by mutableStateOf(listOf<BookMeta>())
@@ -104,12 +108,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** 选择可访问的根目录：优先外部存储，失败回退到应用私有目录（无需权限） */
-    private fun storageRoot(): File {
-        val ext = Environment.getExternalStorageDirectory()
-        if (ext != null && ext.canRead()) return ext
-        return getExternalFilesDir(null) ?: filesDir
-    }
+    /**
+     * 浏览的根目录：固定用外部存储（/sdcard）。
+     * 之前会在 canRead() 为 false 时回退到应用私有目录 —— 但安卓 10 上权限还没授予时 canRead()
+     * 就是 false，结果用户一进导入页就被丢进 /Android/data/... 那种空目录里，以为文件都没了。
+     */
+    private fun storageRoot(): File =
+        Environment.getExternalStorageDirectory() ?: (getExternalFilesDir(null) ?: filesDir)
 
     /** Android 11+ 的「所有文件访问」：没有它，listFiles() 只会返回音乐/图片等媒体文件 */
     private fun hasAllFilesAccess(): Boolean =

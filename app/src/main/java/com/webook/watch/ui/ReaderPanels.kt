@@ -385,6 +385,7 @@ fun TypoPanel(
     onMutate: (Settings.() -> Unit) -> Unit,
     onClose: () -> Unit
 ) {
+    settings.rev    // 订阅设置变化，改完立刻刷新
     val bgs = if (dark) ReaderBackgrounds.dark else ReaderBackgrounds.light
     val bgIdx = if (dark) settings.bgDark else settings.bgLight
     Column(Modifier.fillMaxSize()) {
@@ -467,6 +468,7 @@ fun OtherPanel(
     onApplySystem: () -> Unit,
     onClose: () -> Unit
 ) {
+    settings.rev    // 订阅设置变化，改完立刻刷新
     Column(
         Modifier.fillMaxSize().padding(bottom = 8.dp)
             .padding(top = 2.dp)
@@ -521,6 +523,7 @@ fun SpeakPanel(
     onToggleSpeak: () -> Unit,
     onClose: () -> Unit
 ) {
+    settings.rev    // 订阅设置变化，改完立刻刷新
     Column(Modifier.fillMaxSize()) {
         if (!speakerAvailable) {
             Surface(

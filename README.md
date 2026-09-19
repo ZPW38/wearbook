@@ -15,12 +15,12 @@
 
 | 文件 | 说明 |
 |---|---|
-| `wearbook-watch-1.0.12.apk`（约 1.08 MB） | release 包，已开 R8 压缩与资源裁剪，**v1+v2 双签名、含 32 位 armeabi-v7a**，可直接安装 |
+| `wearbook-watch-1.0.14.apk`（约 1.08 MB） | release 包，已开 R8 压缩与资源裁剪，**v1+v2 双签名、含 32 位 armeabi-v7a**，可直接安装 |
 
 安装方式（任选其一）：
 
 ```bash
-adb install -r wearbook-watch-1.0.12.apk
+adb install -r wearbook-watch-1.0.14.apk
 ```
 
 - 或把 APK 拷进手表存储，用手表自带的文件管理器点击安装；
@@ -56,6 +56,8 @@ adb install -r wearbook-watch-1.0.12.apk
 - 「界面」= 排版：字号 14–26px、行距 1.3–2.2、日间/夜间各 4 套底色（纸白/米黄/淡绿/浅灰 · 纯黑/深灰/深蓝/深棕）、文字两端对齐、共用布局开关（关掉后夜间单独记一套字号行距）
 - 「设置」= 其它：屏幕方向（跟随系统/竖屏/横屏）、自动翻页秒数、阅读时常亮、隐藏状态栏、音量键翻页、点击屏幕两侧翻页、翻页震动、圆屏安全边距、显示亮度控件
 - 任意菜单按钮**长按**会弹出该按钮的功能说明；首次进入阅读页也会给一次操作提示
+- **导入页卡在空目录出不来**（1.0.13）：那个「.. 返回上级目录」原来放在文件列表里，目录一空列表不渲染、入口就跟着消失了。现在标题栏固定一个「↑ 返回上级」按钮，空目录页面也补了一个；顺便把浏览的根目录固定成 `/sdcard`（之前会因为 `File.canRead()` 为 false 而悄悄回退到 App 私有目录，看着像"文件都没了"）。
+- **点开关/滑块，状态不刷新，退出再进才好**（1.0.14）：设置值存在普通对象里（不是 Compose 状态），而 Compose 会**跳过参数没变化的界面**，导致开关点了值改了、界面却没重新读。现在 `Settings` 带一个可观察的修订号 `rev`，改设置时自增，各面板订阅它。
 - **滑动阅读模式**（1.0.12）：在「界面（排版）」面板最上面选「翻页（一屏一页）」或「滑动（连续上下滚）」。
   - 滑动模式 = 整章连续上下滚动，像看网页；实现是 `LazyColumn` 把正文按每 24 行切块渲染，**只画可见的几块**，所以长章节也不会一帧画几千行。
   - 上下拖动正常滚动；点屏幕左右两侧 = 滚一屏；滚到章末有「下一章 ▶」按钮；菜单里的进度、书签、朗读仍按「页」工作（滚动位置会折算成页码）。
@@ -121,7 +123,7 @@ BT="$ANDROID_HOME/build-tools/34.0.0"
 java -jar "$BT/lib/apksigner.jar" sign \
   --v1-signing-enabled=true --v2-signing-enabled=true --v3-signing-enabled=false \
   --ks "$KS" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android \
-  --out wearbook-watch-1.0.12.apk \
+  --out wearbook-watch-1.0.14.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 

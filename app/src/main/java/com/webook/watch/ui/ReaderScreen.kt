@@ -108,6 +108,9 @@ fun ReaderScreen(
     var speaking by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf(Panel.NONE) }
 
+    // 订阅设置变化：设置一改，本页（含各个面板）就会重新读取最新的值
+    settings.rev
+
     // 首次进入给一次操作说明，之后不再打扰
     var tip by remember { mutableStateOf(if (settings.readerTipsShown) null else FIRST_TIP) }
     var searching by remember { mutableStateOf(false) }

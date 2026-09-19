@@ -64,6 +64,15 @@ fun ImportScreen(
                 modifier = Modifier.padding(start = 4.dp).weight(1f),
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
+            // 返回上一级：固定在标题栏，不在列表里 —— 目录为空时也一定点得到
+            IconButton(onClick = onGoUp, enabled = canGoUp) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_arrow_upward),
+                    contentDescription = "返回上级目录",
+                    tint = MaterialTheme.colorScheme.onSurface
+                        .copy(alpha = if (canGoUp) 1f else 0.28f)
+                )
+            }
         }
         }
         // 当前路径（可滚动截断，让用户知道在哪儿）
@@ -191,6 +200,11 @@ fun ImportScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp)
                 )
+                if (canGoUp) {
+                    Button(onClick = onGoUp, modifier = Modifier.padding(top = 14.dp)) {
+                        Text("返回上级目录")
+                    }
+                }
             }
         }
     }
