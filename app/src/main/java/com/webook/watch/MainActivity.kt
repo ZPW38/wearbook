@@ -92,6 +92,12 @@ class MainActivity : ComponentActivity() {
     private var storageGranted by mutableStateOf(false)
     /** Android 11+ 未拿到「所有文件访问」：此时 File API 只能看到媒体文件，需要引导用户去系统设置开权限 */
     private var needAllFiles by mutableStateOf(false)
+    /**
+     * 站在存储根目录却一个条目都读不到 —— 说明系统根本没给读外部存储
+     * （安卓 10 上 targetSdk≥29 的分区存储，光有 READ_EXTERNAL_STORAGE 也不够；
+     *  真机上根目录永远至少有 Android/ 等目录，所以"空"就等于"被拦"）。
+     */
+    private var storageBlocked by mutableStateOf(false)
     private var askedAllFiles = false
     private var lastBackAt = 0L
 
@@ -119,6 +125,17 @@ class MainActivity : ComponentActivity() {
     /** Android 11+ 的「所有文件访问」：没有它，listFiles() 只会返回音乐/图片等媒体文件 */
     private fun hasAllFilesAccess(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
+
+    /**
+     * 应用专属外部目录（/sdcard/Android/data/<包名>/files）。
+     * 这个目录**任何系统版本、任何权限状态下都能读写**，是权限被 ROM 锁死时的最后通道：
+     * 用数据线 / MT 管理器把书放进去，这里就一定看得到。
+     */
+    private fun appBooksDir(): File {
+        val d = getExternalFilesDir(null) ?: File(filesDir, "books")
+        if (!d.exists()) d.mkdirs()
+        return d
+    }
 
     /** 跳系统设置里的「所有文件访问」开关（拿不到就退到总开关页，再不行给提示） */
     private fun openAllFilesSettings() {
@@ -279,6 +296,7 @@ class MainActivity : ComponentActivity() {
                                 canGoUp = dirStack.size > 1,
                                 hasPermission = storageGranted,
                                 needAllFiles = needAllFiles,
+                                storageBlocked = storageBlocked,
                                 onOpen = { e ->
                                     if (e.file.isDirectory) { dirStack.add(e.file); refreshDir() }
                                     else if (e.isBook) importFile(e.file)
@@ -287,7 +305,15 @@ class MainActivity : ComponentActivity() {
                                 onGoUp = { if (dirStack.size > 1) { dirStack.removeAt(dirStack.lastIndex); refreshDir() } },
                                 onBack = { screen = "library" },
                                 onGrant = { ensureStoragePermission() },
-                                onOpenAllFiles = { openAllFilesSettings() }
+                                onOpenAllFiles = { openAllFilesSettings() },
+                                onOpenAppDir = {
+                                    // 压栈而不是清栈：这样「返回上级」还能回到 /sdcard
+                                    val d = appBooksDir()
+                                    if (dirStack.lastOrNull()?.absolutePath != d.absolutePath) dirStack.add(d)
+                                    if (dirStack.size > 1) storageBlocked = false
+                                    refreshDir()
+                                    if (entries.isEmpty()) toast("专属文件夹也是空的 —— 可以用数据线或 MT 管理器把书拷进去")
+                                }
                             )
 
                             "settings" -> SettingsScreen(
@@ -453,12 +479,14 @@ class MainActivity : ComponentActivity() {
         name.substringAfterLast('.', "").lowercase() in SUPPORTED_EXT
 
     private fun refreshDir() {
-        val dir = dirStack.lastOrNull() ?: run { entries = emptyList(); return }
+        val dir = dirStack.lastOrNull() ?: run { entries = emptyList(); storageBlocked = false; return }
         val list = dir.listFiles() ?: emptyArray()
         entries = list
             .filter { !it.name.startsWith(".") }
             .map { FmEntry(it.name ?: "?", it.isDirectory, it, !it.isDirectory && isBookFile(it.name)) }
             .sortedWith(compareBy({ !it.isDir }, { it.name.lowercase() }))
+        // 根目录读到空 → 不是真的空，是系统没放行（真机根目录至少有 Android/ 等）
+        storageBlocked = dirStack.size == 1 && entries.isEmpty()
     }
 
     /** 解析并入库；epub 需要真实文件（ZipFile），其它格式走字节数组 */

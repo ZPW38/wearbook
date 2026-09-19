@@ -12,8 +12,8 @@ android {
         applicationId = "com.webook.watch"
         minSdk = 24          // 覆盖绝大多数安卓手表（普通手机也能装）
         targetSdk = 34
-        versionCode = 15
-        versionName = "1.0.14"
+        versionCode = 16
+        versionName = "1.0.15"
         resourceConfigurations += listOf("zh", "en")
         // 手表几乎都是 ARM：只出 32 位（armeabi-v7a）并兼容 64 位（arm64-v8a）
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }

@@ -43,11 +43,13 @@ fun ImportScreen(
     canGoUp: Boolean,
     hasPermission: Boolean,
     needAllFiles: Boolean,
+    storageBlocked: Boolean,
     onOpen: (FmEntry) -> Unit,
     onGoUp: () -> Unit,
     onBack: () -> Unit,
     onGrant: () -> Unit,
-    onOpenAllFiles: () -> Unit
+    onOpenAllFiles: () -> Unit,
+    onOpenAppDir: () -> Unit
 ) {
     Column(Modifier.fillMaxSize()) {
         Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
@@ -104,6 +106,33 @@ fun ImportScreen(
                     )
                     Button(onClick = onOpenAllFiles, modifier = Modifier.padding(top = 8.dp)) {
                         Text("开启「所有文件访问」")
+                    }
+                }
+            }
+        }
+
+        // 安卓 10 上 targetSdk≥29：分区存储会把外部存储整个挡住，连根目录都读不到
+        if (storageBlocked && !needAllFiles) {
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Column(Modifier.padding(11.dp)) {
+                    Text(
+                        "系统没放行读取存储",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Text(
+                        "这台设备把外部存储锁住了，所以一个文件都列不出来（不是真的空）。" +
+                            "可以改用下面这个「专属文件夹」——那是本应用自己的目录，任何系统都允许读写。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                    Button(onClick = onOpenAppDir, modifier = Modifier.padding(top = 8.dp)) {
+                        Text("打开专属文件夹")
                     }
                 }
             }
@@ -189,6 +218,7 @@ fun ImportScreen(
             ) {
                 Text(
                     if (needAllFiles) "此目录下没有系统允许读取的电子书"
+                    else if (storageBlocked) "系统没有放行读取存储，所以这里列不出文件"
                     else "此目录为空，或没有可读的子目录",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -200,8 +230,20 @@ fun ImportScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp)
                 )
+                // 万一系统就是不给读（部分手表 ROM 锁得死），还有一条不需要权限的路
+                Text(
+                    "兜底办法：在「MT 管理器」等文件管理器里长按图书 → 分享 / 打开方式 → 选「腕上书」，不用任何权限就能导入",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                    modifier = Modifier.padding(top = 10.dp, start = 6.dp, end = 6.dp)
+                )
                 if (canGoUp) {
-                    Button(onClick = onGoUp, modifier = Modifier.padding(top = 14.dp)) {
+                    Button(onClick = onOpenAppDir, modifier = Modifier.padding(top = 14.dp)) {
+                        Text("打开专属文件夹")
+                    }
+                }
+                if (canGoUp) {
+                    Button(onClick = onGoUp, modifier = Modifier.padding(top = 8.dp)) {
                         Text("返回上级目录")
                     }
                 }

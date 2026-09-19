@@ -15,12 +15,12 @@
 
 | 文件 | 说明 |
 |---|---|
-| `wearbook-watch-1.0.14.apk`（约 1.08 MB） | release 包，已开 R8 压缩与资源裁剪，**v1+v2 双签名、含 32 位 armeabi-v7a**，可直接安装 |
+| `wearbook-watch-1.0.15.apk`（约 1.08 MB） | release 包，已开 R8 压缩与资源裁剪，**v1+v2 双签名、含 32 位 armeabi-v7a**，可直接安装 |
 
 安装方式（任选其一）：
 
 ```bash
-adb install -r wearbook-watch-1.0.14.apk
+adb install -r wearbook-watch-1.0.15.apk
 ```
 
 - 或把 APK 拷进手表存储，用手表自带的文件管理器点击安装；
@@ -56,6 +56,7 @@ adb install -r wearbook-watch-1.0.14.apk
 - 「界面」= 排版：字号 14–26px、行距 1.3–2.2、日间/夜间各 4 套底色（纸白/米黄/淡绿/浅灰 · 纯黑/深灰/深蓝/深棕）、文字两端对齐、共用布局开关（关掉后夜间单独记一套字号行距）
 - 「设置」= 其它：屏幕方向（跟随系统/竖屏/横屏）、自动翻页秒数、阅读时常亮、隐藏状态栏、音量键翻页、点击屏幕两侧翻页、翻页震动、圆屏安全边距、显示亮度控件
 - 任意菜单按钮**长按**会弹出该按钮的功能说明；首次进入阅读页也会给一次操作提示
+- **安卓 10 手表上一个文件都列不出来**（1.0.15）：targetSdk 34 装在 Android 10 上同样受分区存储限制，光有 `READ_EXTERNAL_STORAGE` 时 `File.listFiles()` 在 `/sdcard` 返回空 —— 之前代码里"Android 10 及以下不需要特殊权限"的判定是错的。现在清单加了 `android:requestLegacyExternalStorage="true"`（只在 Android 10 生效，Android 11+ 自动忽略，安卓 11+ 仍走「所有文件访问」）。另外补了两条兜底：① 根部读不到任何文件时，导入页直接提示"系统没放行读取存储"并给「打开专属文件夹」按钮 —— `/sdcard/Android/data/<包名>/files` 这个目录任何系统、任何权限都能读写；② 空目录页写明可以从 MT 管理器等文件管理器「分享 / 打开方式」选腕上书导入（走 `contentResolver` 流，零权限）。
 - **导入页卡在空目录出不来**（1.0.13）：那个「.. 返回上级目录」原来放在文件列表里，目录一空列表不渲染、入口就跟着消失了。现在标题栏固定一个「↑ 返回上级」按钮，空目录页面也补了一个；顺便把浏览的根目录固定成 `/sdcard`（之前会因为 `File.canRead()` 为 false 而悄悄回退到 App 私有目录，看着像"文件都没了"）。
 - **点开关/滑块，状态不刷新，退出再进才好**（1.0.14）：设置值存在普通对象里（不是 Compose 状态），而 Compose 会**跳过参数没变化的界面**，导致开关点了值改了、界面却没重新读。现在 `Settings` 带一个可观察的修订号 `rev`，改设置时自增，各面板订阅它。
 - **滑动阅读模式**（1.0.12）：在「界面（排版）」面板最上面选「翻页（一屏一页）」或「滑动（连续上下滚）」。
@@ -123,7 +124,7 @@ BT="$ANDROID_HOME/build-tools/34.0.0"
 java -jar "$BT/lib/apksigner.jar" sign \
   --v1-signing-enabled=true --v2-signing-enabled=true --v3-signing-enabled=false \
   --ks "$KS" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android \
-  --out wearbook-watch-1.0.14.apk \
+  --out wearbook-watch-1.0.15.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 
