@@ -25,9 +25,12 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -37,7 +40,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -99,6 +105,8 @@ class MainActivity : ComponentActivity() {
      */
     private var storageBlocked by mutableStateOf(false)
     private var askedAllFiles = false
+    /** 正在导入的书名（非空时盖一层进度遮罩）——大 EPUB 要解析十几秒，没有提示用户会以为没反应然后反复点 */
+    private var importing by mutableStateOf<String?>(null)
     private var lastBackAt = 0L
 
     data class Confirm(val title: String, val body: String, val action: () -> Unit)
@@ -346,6 +354,47 @@ class MainActivity : ComponentActivity() {
                             }
                         )
                     }
+
+                    // 导入进度遮罩：大 EPUB（几百 MB、上千章）解析要十几秒，必须有反馈，
+                    // 同时挡住重复点击（否则同一本书会被导入好几遍）
+                    importing?.let { nm ->
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.6f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh
+                            ) {
+                                Column(
+                                    Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.padding(4.dp))
+                                    Text(
+                                        "正在解析", style = MaterialTheme.typography.titleSmall,
+                                        modifier = Modifier.padding(top = 10.dp)
+                                    )
+                                    Text(
+                                        nm, style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+                                    Text(
+                                        "大文件（上千章）可能要十几秒，请稍候",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(top = 8.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
                 }
             }
@@ -494,24 +543,32 @@ class MainActivity : ComponentActivity() {
      * epub 只需要文件本身（走 ZipFile 逐章读），所以 bytes 传 null —— 千万别为了 epub 整读文件，
      * 一本 171MB 的 epub 会把 96MB 堆的手表直接打崩（用户实测 OOM 闪退）。
      */
-    private suspend fun parseAndStore(name: String, bytes: ByteArray?, epubSrc: File?): ParsedBook {
+    private suspend fun parseAndStore(name: String, bytes: ByteArray?, epubSrc: File?): Pair<ParsedBook, Boolean> {
         val sizeBytes = epubSrc?.length() ?: bytes?.size?.toLong() ?: 0L
         val parsed =
             if (name.endsWith(".epub", true) && epubSrc != null) BookParser.epubToBook(epubSrc, name)
             else BookParser.parse(File(""), name, bytes ?: ByteArray(0))
+        // 同一本书（书名 + 格式 + 章节数都一样）不重复入库 ——
+        // 用户嫌没反应连点几下，之前会往书架里塞好几本一模一样的
+        val dup = store.list().any {
+            it.title == parsed.title && it.fmt == parsed.fmt && it.chapterCount == parsed.chapters.size
+        }
+        if (dup) return parsed to true
         store.add(parsed.title, parsed.author, parsed.fmt, sizeBytes, parsed.chapters, parsed.cover)
-        return parsed
+        return parsed to false
     }
 
-    private suspend fun finishImport(parsed: ParsedBook) {
+    private suspend fun finishImport(parsed: ParsedBook, duplicated: Boolean) {
         withContext(Dispatchers.Main) {
             refresh()
-            toast("已导入《${parsed.title}》")
+            toast(if (duplicated) "《${parsed.title}》已经在书架里了" else "已导入《${parsed.title}》")
             screen = "library"
         }
     }
 
     private fun importFile(file: File) {
+        if (importing != null) { toast("正在导入，请稍候…"); return }
+        importing = file.name.substringBeforeLast('.')
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val isEpub = file.name.endsWith(".epub", true)
@@ -523,10 +580,13 @@ class MainActivity : ComponentActivity() {
                 }
                 // epub 不需要字节数组（ZipFile 逐章读），传 null 省掉一整份文件的内存
                 val bytes = if (isEpub) null else file.readBytes()
-                finishImport(parseAndStore(file.name, bytes, file))
+                val (parsed, dup) = parseAndStore(file.name, bytes, file)
+                finishImport(parsed, dup)
             } catch (e: Throwable) {
                 // 连 OutOfMemoryError 一起接住：宁可提示一句，也不要整个 App 闪退
                 withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
+            } finally {
+                withContext(Dispatchers.Main) { importing = null }
             }
         }
     }
@@ -551,6 +611,8 @@ class MainActivity : ComponentActivity() {
             toast("不支持这个格式：$name")
             return
         }
+        if (importing != null) { toast("正在导入，请稍候…"); return }
+        importing = name.substringBeforeLast('.')
         lifecycleScope.launch(Dispatchers.IO) {
             val tmp = File(cacheDir, "in_${System.currentTimeMillis()}_$name")
             try {
@@ -568,12 +630,14 @@ class MainActivity : ComponentActivity() {
                     }
                     return@launch
                 }
-                val parsed = parseAndStore(name, if (isEpub) null else tmp.readBytes(), tmp)
+                val (parsed, dup) = parseAndStore(name, if (isEpub) null else tmp.readBytes(), tmp)
                 tmp.delete()
-                finishImport(parsed)
+                finishImport(parsed, dup)
             } catch (e: Throwable) {
                 tmp.delete()
                 withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
+            } finally {
+                withContext(Dispatchers.Main) { importing = null }
             }
         }
     }

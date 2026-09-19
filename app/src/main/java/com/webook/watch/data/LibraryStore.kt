@@ -70,7 +70,8 @@ class LibraryStore(private val ctx: Context) {
             }
         }
         val meta = BookMeta(id, title, author, fmt, chapters.size, size, System.currentTimeMillis(), coverName)
-        File(chapterDir, "$id.json").writeText(chaptersToJson(chapters))
+        // 逐章写入：上千章的书如果先拼成一个巨大字符串，会连续触发阻塞式 GC，手表上界面会卡住
+        File(chapterDir, "$id.json").bufferedWriter().use { w -> chaptersToJson(chapters, w) }
         save(list() + meta)
         return meta
     }
@@ -100,14 +101,19 @@ class LibraryStore(private val ctx: Context) {
         return runCatching { BitmapFactory.decodeFile(File(coverDir, n).absolutePath) }.getOrNull()
     }
 
-    private fun chaptersToJson(chapters: List<Chapter>): String {
-        val arr = JSONArray()
-        chapters.forEach { c ->
-            val ps = JSONArray()
-            c.paragraphs.forEach { ps.put(it) }
-            arr.put(JSONObject().put("t", c.title).put("p", ps))
+    /** 直接流式写进文件，不在内存里拼整本书的 JSON */
+    private fun chaptersToJson(chapters: List<Chapter>, out: Appendable) {
+        out.append('[')
+        chapters.forEachIndexed { i, c ->
+            if (i > 0) out.append(',')
+            out.append("{\"t\":").append(JSONObject.quote(c.title)).append(",\"p\":[")
+            c.paragraphs.forEachIndexed { j, p ->
+                if (j > 0) out.append(',')
+                out.append(JSONObject.quote(p))
+            }
+            out.append("]}")
         }
-        return arr.toString()
+        out.append(']')
     }
 
     fun allProgress(): Map<String, Progress> {
