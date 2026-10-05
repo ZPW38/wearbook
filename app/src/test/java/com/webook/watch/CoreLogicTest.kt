@@ -4,6 +4,7 @@ import com.webook.watch.data.ImageRef
 import com.webook.watch.data.imageParagraph
 import com.webook.watch.data.parseImagePara
 import com.webook.watch.parser.BookParser
+import com.webook.watch.parser.MobiParser
 import com.webook.watch.parser.PalmDoc
 import com.webook.watch.text.PageLine
 import com.webook.watch.text.PagePacker
@@ -152,5 +153,87 @@ class CoreLogicTest {
         val cn = out.count { it.code in 0x4E00..0x9FFF }
         assertTrue("坏字节不该让整本变 GBK 乱码，实际中文字数=$cn", cn > out.length / 2)
         assertTrue("不该出现 GBK 乱码特征", !out.contains("鐩"))
+    }
+
+    /* ---------- MOBI 章节切分：目录锚点优先，无目录退回分页符（1.0.20） ---------- */
+
+    private fun be(v: Int) = byteArrayOf(
+        (v ushr 24).toByte(), (v ushr 16).toByte(), (v ushr 8).toByte(), v.toByte()
+    )
+
+    /** 造一个最小的、compression=1 的合法 MOBI，正文就一段 */
+    private fun buildMobi(body: String): ByteArray {
+        val text = body.toByteArray(Charsets.UTF_8)
+        val rec0 = ByteArray(40)
+        rec0[1] = 1                                   // compression = 1（不压缩）
+        be(text.size).copyInto(rec0, 4)                 // textLength
+        rec0[9] = 1                                    // recordCount = 1（正文记录数）
+        rec0[10] = 0x10                               // recordSize = 4096
+        "MOBI".toByteArray().copyInto(rec0, 16)
+        be(24).copyInto(rec0, 20)                      // headerLength
+        be(2).copyInto(rec0, 24)                       // mobiType
+        be(65001).copyInto(rec0, 28)                   // textEncoding = UTF-8
+        val db = ByteArray(78 + 16)
+        "BOOKMOBI".toByteArray().copyInto(db, 60)
+        db[77] = 2                                     // numRecords = 2
+        val off0 = db.size
+        be(off0).copyInto(db, 78)
+        be(off0 + rec0.size).copyInto(db, 86)
+        return db + rec0 + text
+    }
+
+    /** filepos 是字节偏移，中文一字 3 字节，所以不能用 String.length */
+    private fun blen(s: String) = s.toByteArray(Charsets.UTF_8).size
+
+    @Test
+    fun mobi_splitsChaptersByTocAnchors() {
+        // 真实结构：目录区的锚点 + 依次排开的正文，filepos 指向该章正文的起点
+        val c1 = "甲".repeat(400)
+        val c2 = "乙".repeat(400)
+        val prefix = "<html><body><a filepos=0000000000>第一章</a>"
+        val mid = "<p>$c1</p><a filepos=0000000000>第二章</a>"
+        val a1 = blen(prefix)
+        val a2 = a1 + blen(mid)
+        val body = (prefix + mid + "<p>$c2</p></body></html>")
+            .replaceFirst("0000000000", a1.toString().padStart(10, '0'))
+            .replaceFirst("0000000000", a2.toString().padStart(10, '0'))
+        val r = MobiParser.parse(buildMobi(body), "t.mobi")
+        assertEquals("应按两个锚点切出两章", 2, r.chapters.size)
+        assertEquals("第一章", r.chapters[0].title)
+        assertEquals("第二章", r.chapters[1].title)
+    }
+
+    @Test
+    fun mobi_dropsJunkTocTitles() {
+        val c1 = "甲".repeat(400)
+        val c2 = "乙".repeat(400)
+        val c3 = "丙".repeat(400)
+        val prefix = "<html><body>"
+        val seg1 = "<a filepos=0000000000>第一章</a><p>$c1</p>"
+        val seg2 = "<a filepos=0000000000>1.</a><a filepos=0000000000>第二章</a><p>$c2</p>"
+        val seg3 = "<a filepos=0000000000>《某书》（点击链接跳转详情页面）</a><p>$c3</p>"
+        val a1 = blen(prefix)
+        val a2 = a1 + blen(seg1)
+        val a3 = a2 + blen(seg2)
+        val a4 = a3 + blen(seg3)
+        val body = (prefix + seg1 + seg2 + seg3 + "</body></html>")
+            .replaceFirst("0000000000", a1.toString().padStart(10, '0'))
+            .replaceFirst("0000000000", a2.toString().padStart(10, '0'))
+            .replaceFirst("0000000000", a3.toString().padStart(10, '0'))
+            .replaceFirst("0000000000", a4.toString().padStart(10, '0'))
+        val r = MobiParser.parse(buildMobi(body), "t.mobi")
+        val titles = r.chapters.map { it.title }
+        assertTrue("纯序号标题应被丢弃: $titles", titles.none { it == "1." })
+        assertTrue("推广链接标题应被丢弃: $titles", titles.none { it.contains("点击链接") })
+        assertTrue("正常标题要保留: $titles", titles.contains("第一章"))
+        assertTrue("正常标题要保留: $titles", titles.contains("第二章"))
+    }
+
+    @Test
+    fun mobi_fallsBackToPageBreakWhenNoToc() {
+        val body = "<html><body><p>" + "甲".repeat(120) +
+            "</p><mbp:pagebreak/><p>" + "乙".repeat(120) + "</p></body></html>"
+        val r = MobiParser.parse(buildMobi(body), "t.mobi")
+        assertTrue("没有目录时应退回分页符切分，实际 ${r.chapters.size} 章", r.chapters.size >= 2)
     }
 }
