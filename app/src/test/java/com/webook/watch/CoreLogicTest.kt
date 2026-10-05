@@ -3,6 +3,7 @@ package com.webook.watch
 import com.webook.watch.data.ImageRef
 import com.webook.watch.data.imageParagraph
 import com.webook.watch.data.parseImagePara
+import com.webook.watch.parser.BookParser
 import com.webook.watch.parser.PalmDoc
 import com.webook.watch.text.PageLine
 import com.webook.watch.text.PagePacker
@@ -113,5 +114,43 @@ class CoreLogicTest {
             for (i in p.start until p.end) h += ls[i].height(30f)
             assertTrue("页面高度 $h 超出 100", h <= 100f)
         }
+    }
+
+    /* ---------- 编码识别：坏字节不该拖垮整本书（1.0.19） ---------- */
+
+    @Test
+    fun decode_normalUtf8KeepsChinese() {
+        val raw = "科幻小说里的中文句子，读客经典文库。".repeat(200)
+        assertEquals(raw, BookParser.decode(raw.toByteArray(Charsets.UTF_8)))
+    }
+
+    @Test
+    fun decode_gbkStillWorks() {
+        val raw = "这是一本纯中文的电子书正文，应该用 GBK 解码。".repeat(200)
+        assertEquals(raw, BookParser.decode(raw.toByteArray(charset("GBK"))))
+    }
+
+    @Test
+    fun decode_preferCharsetWins() {
+        val raw = "三体全集".repeat(50)
+        val bytes = raw.toByteArray(Charsets.UTF_8)
+        assertEquals(raw, BookParser.decode(bytes, "UTF-8"))
+    }
+
+    /** 三体的 mobi 里混进了约 0.07% 的坏字节，旧逻辑会整本退回 GBK 变成「鐩綍褰」 */
+    @Test
+    fun decode_brokenUtf8StaysChineseInsteadOfGbk() {
+        val good = "这是《三体》的正文，读客经典文库出版，写得非常好。".repeat(400)
+        val bytes = good.toByteArray(Charsets.UTF_8).toMutableList()
+        // 每 400 字节插一个非法字节（模拟文件损坏）
+        var i = 10
+        while (i < bytes.size) {
+            bytes[i] = 0xFF.toByte()
+            i += 400
+        }
+        val out = BookParser.decode(bytes.toByteArray())
+        val cn = out.count { it.code in 0x4E00..0x9FFF }
+        assertTrue("坏字节不该让整本变 GBK 乱码，实际中文字数=$cn", cn > out.length / 2)
+        assertTrue("不该出现 GBK 乱码特征", !out.contains("鐩"))
     }
 }

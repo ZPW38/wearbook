@@ -63,16 +63,52 @@ object BookParser {
         }
     }
 
-    /* ---------------- 编码识别：先严格 UTF-8，失败回退 GBK ---------------- */
-    fun decode(bytes: ByteArray): String {
+    /* ---------------- 编码识别：严格 UTF-8 优先，失败按「可读性」打分选容错解码 ---------------- */
+    /**
+     * @param prefer 格式自述的编码名（如 MOBI 头里的 textEncoding），有就优先相信它
+     *
+     * 旧实现是「非 UTF-8 就整本退回 GBK」——3MB 的书只要混进 1 个坏字节，
+     * 整篇就变成「鐩綍褰」这种 GBK 乱码，看着像全坏，其实 99% 的字都是好的。
+     * 现在改成：先严格解码；实在有坏字节，就让 UTF-8 与 GBK 各自容错解一遍，
+     * 按「中文占比 - 坏字符占比×3」打分，谁更像正常中文就用谁。
+     */
+    fun decode(bytes: ByteArray, prefer: String? = null): String {
+        if (prefer != null) {
+            val s = runCatching { String(bytes, Charset.forName(prefer)) }.getOrNull()
+            if (s != null && badRatio(s) < 0.05f) return s
+        }
         try {
             val dec = Charset.forName("UTF-8").newDecoder()
                 .onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
             val s = dec.decode(ByteBuffer.wrap(bytes)).toString()
             if (!s.contains('\uFFFD')) return s
-        } catch (e: Exception) { /* 落到 GBK */ }
-        return runCatching { String(bytes, Charset.forName("GBK")) }.getOrDefault(String(bytes, Charsets.UTF_8))
+        } catch (e: Exception) { /* 下面用打分的方式兜底 */ }
+        val u8 = String(bytes, Charsets.UTF_8)
+        val gbk = runCatching { String(bytes, Charset.forName("GBK")) }.getOrNull() ?: return u8
+        return if (legibility(u8) >= legibility(gbk)) u8 else gbk
+    }
+
+    /** 取样 2 万字算「像不像正常中文」，够用又快 */
+    private fun legibility(s: String): Float {
+        val n = minOf(s.length, 20000)
+        if (n == 0) return 0f
+        var cn = 0
+        var bad = 0
+        for (i in 0 until n) {
+            val c = s[i]
+            if (c == '\uFFFD') bad++
+            else if (c.code in 0x4E00..0x9FFF) cn++
+        }
+        return cn.toFloat() / n - (bad.toFloat() / n) * 3f
+    }
+
+    private fun badRatio(s: String): Float {
+        val n = minOf(s.length, 20000)
+        if (n == 0) return 0f
+        var bad = 0
+        for (i in 0 until n) if (s[i] == '\uFFFD') bad++
+        return bad.toFloat() / n
     }
 
     /* ---------------- HTML -> 段落 ---------------- */

@@ -1,6 +1,7 @@
 package com.webook.watch.parser
 
 import com.webook.watch.data.Chapter
+import java.nio.charset.Charset
 
 /**
  * MOBI / AZW（PalmDOC 压缩）解析
@@ -37,7 +38,19 @@ object MobiParser {
         for (p in parts) { p.copyInto(textBytes, pos); pos += p.size }
         if (textLen > 0 && textLen < textBytes.size) textBytes = textBytes.copyOfRange(0, textLen)
 
-        val text = BookParser.decode(textBytes)
+        // MOBI 头自述的编码（65001=UTF-8 / 1252=CP1252 / 936=GBK ...），比猜靠谱
+        val enc = u32(u, r0 + 28)
+        val charset: String? = when (enc) {
+            65001 -> "UTF-8"
+            1252 -> "windows-1252"
+            936 -> "GBK"
+            950 -> "Big5"
+            932 -> "Shift_JIS"
+            949 -> "EUC-KR"
+            1361 -> "EUC-JP"
+            else -> runCatching { Charset.forName(enc.toString()).name() }.getOrNull()
+        }
+        val text = BookParser.decode(textBytes, charset)
         val chapters = mutableListOf<Chapter>()
         text.split(Regex("(?i)<mbp:pagebreak\\s*/?>")).forEach { seg ->
             val paras = BookParser.htmlToParagraphs("<html><body>$seg</body></html>")
