@@ -148,6 +148,23 @@ class Settings(ctx: Context) {
         get() = sp.getInt("bg_d", 0)
         set(v) = sp.edit().putInt("bg_d", v).apply()
 
+    /* ---------------- 1.0.21 新增：底部状态栏 ---------------- */
+
+    /** 正文最下方显示一条状态栏（百分比 / 时间） */
+    var showStatusBar: Boolean
+        get() = sp.getBoolean("stbar", true)
+        set(v) = sp.edit().putBoolean("stbar", v).apply()
+
+    /** 状态栏里显示阅读百分比 */
+    var statusPercent: Boolean
+        get() = sp.getBoolean("stpct", true)
+        set(v) = sp.edit().putBoolean("stpct", v).apply()
+
+    /** 状态栏里显示当前时间 */
+    var statusTime: Boolean
+        get() = sp.getBoolean("sttime", true)
+        set(v) = sp.edit().putBoolean("sttime", v).apply()
+
     /** 首次进入阅读页是否显示过操作说明 */
     var readerTipsShown: Boolean
         get() = sp.getBoolean("tips", false)

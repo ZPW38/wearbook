@@ -127,7 +127,14 @@ class LibraryStore(private val ctx: Context) {
             val o = JSONObject(progressFile.readText())
             o.keys().asSequence().associateWith { k ->
                 val v = o.getJSONObject(k)
-                Progress(v.optInt("c", 0), v.optInt("p", 0), v.optLong("t", 0))
+                Progress(
+                    chapter = v.optInt("c", 0),
+                    page = v.optInt("p", 0),
+                    para = v.optInt("pa", -1),          // 老记录没有这个键 -> -1（走页码兜底）
+                    charStart = v.optInt("cs", 0),
+                    frac = v.optDouble("f", 0.0).toFloat(),
+                    updatedAt = v.optLong("t", 0)
+                )
             }
         } catch (e: Exception) { emptyMap() }
     }
@@ -143,7 +150,13 @@ class LibraryStore(private val ctx: Context) {
     private fun saveProgress(map: Map<String, Progress>) {
         val o = JSONObject()
         map.forEach { (k, v) ->
-            o.put(k, JSONObject().put("c", v.chapter).put("p", v.page).put("t", v.updatedAt))
+            o.put(
+                k, JSONObject()
+                    .put("c", v.chapter).put("p", v.page)
+                    .put("pa", v.para).put("cs", v.charStart)
+                    .put("f", v.frac.toDouble())
+                    .put("t", v.updatedAt)
+            )
         }
         progressFile.writeText(o.toString())
     }

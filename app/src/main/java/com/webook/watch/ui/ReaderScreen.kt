@@ -44,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -72,6 +73,7 @@ import com.webook.watch.text.PagePacker
 import com.webook.watch.text.LineBreaker
 import com.webook.watch.text.readerPaint
 import com.webook.watch.tts.Speaker
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -91,8 +93,15 @@ fun ReaderScreen(
     dark: Boolean,
     initialChapter: Int,
     initialPage: Int,
+    /**
+     * 精确续读位置：段落号 + 段内字符偏移（-1 = 没有，退回按页码）。
+     * 比页码可靠：页码是排版产物，换个字号/行距/屏幕就漂了。
+     */
+    initialPara: Int = -1,
+    initialCharStart: Int = 0,
     bookmarks: List<Bookmark>,
-    onProgress: (Int, Int, Float) -> Unit,   // 章、页、全书进度 0~1
+    /** 章、页、段、段内偏移、全书进度 0~1 */
+    onProgress: (Int, Int, Int, Int, Float) -> Unit,
     onBack: () -> Unit,
     onVibrate: () -> Unit,
     onMutate: (Settings.() -> Unit) -> Unit, // 改设置并立即生效
@@ -102,13 +111,25 @@ fun ReaderScreen(
     onApplySystem: () -> Unit,
     onAddBookmark: (Bookmark) -> Unit,
     onRemoveBookmark: (Int) -> Unit,
-    onRegisterTurn: ((Boolean) -> Unit) -> Unit   // 注册音量键翻页回调（null 表示注销）
+    onRegisterTurn: ((Boolean) -> Unit) -> Unit,  // 注册音量键翻页回调（null 表示注销）
+    /**
+     * 注册「立刻把进度落盘」的回调。
+     * 界面被收起 / Activity 进 onStop 时调用 —— 防抖还没到点就切走或划掉任务卡，
+     * 也能保证最后一次读到哪儿被写进磁盘，而不是等到下次翻开才发现回到老地方。
+     */
+    onRegisterFlush: ((() -> Unit)?) -> Unit = {}
 ) {
     var chapterIdx by remember { mutableIntStateOf(initialChapter.coerceIn(0, chapters.lastIndex.coerceAtLeast(0))) }
     var pageIdx by remember { mutableIntStateOf(initialPage) }
     var lines by remember { mutableStateOf<List<PageLine>>(emptyList()) }
     var pages by remember { mutableStateOf<List<Page>>(emptyList()) }
     var showOverlay by remember { mutableStateOf(false) }
+    /** 首次进入时要恢复到的精确位置（段落 + 段内偏移）；null 表示这次不用精确恢复 */
+    var pendingRestore by remember {
+        mutableStateOf(if (initialPara >= 0) initialPara to initialCharStart else null)
+    }
+    /** 底部状态栏里显示的当前时间（每分钟刷新一次就够） */
+    var clock by remember { mutableStateOf("") }
     var speaking by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf(Panel.NONE) }
 
@@ -143,18 +164,39 @@ fun ReaderScreen(
     val paint = remember(fontSizePx, textColor) { readerPaint(fontSizePx, textColor.toArgb()) }
     val justify = settings.justify
 
+    /* ---- 进度：按「字符数」算，而不是按页码 ---- */
+    val chapterChars = remember(chapters) {
+        chapters.map { ch -> ch.paragraphs.sumOf { it.length }.coerceAtLeast(1) }
+    }
+    val totalChars = remember(chapterChars) { chapterChars.sum().coerceAtLeast(1) }
+
+    /** 第 chIdx 章、第 para 段、段内第 cs 个字符 —— 占全书的百分之多少 */
+    fun progressOf(chIdx: Int, para: Int, cs: Int): Float {
+        var done = 0
+        for (i in 0 until chIdx.coerceIn(0, chapterChars.size)) done += chapterChars[i]
+        var inChapter = 0
+        chapters.getOrNull(chIdx)?.let { ch ->
+            for (i in 0 until para.coerceIn(0, ch.paragraphs.size)) inChapter += ch.paragraphs[i].length
+        }
+        return ((done + inChapter + cs).toFloat() / totalChars).coerceIn(0f, 1f)
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize().background(Color(bg.bg))) {
         val wPx = with(density) { maxWidth.toPx() }
         val hPx = with(density) { maxHeight.toPx() }
         val padX = with(density) { 14.dp.toPx() }
         val padY = with(density) { 12.dp.toPx() }
         val textW = wPx - padX * 2
+        // 底部状态栏（百分比 / 时间）占掉一行，正文相应让出空间，免得盖住字
+        val showBar = settings.showStatusBar && (settings.statusPercent || settings.statusTime)
+        val statusH = if (showBar) lineHeightPx * 1.15f else 0f
+        val bodyH = (hPx - padY * 2 - statusH).coerceAtLeast(lineHeightPx * 3f)
 
         // 插图：zip 内路径 -> 解码好的位图（值是 null 表示文件不在或解码失败，画占位框）
         val imgCache = remember { mutableStateMapOf<String, android.graphics.Bitmap?>() }
         val imagePaint = remember { android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG) }
         // 一张插图最多占版面高度的 62%，再长就等比缩小，免得一整页只有一张图
-        val maxImgH = (hPx - padY * 2) * 0.62f
+        val maxImgH = bodyH * 0.62f
 
         // 预取当前页用到的插图（翻页模式一页最多一两张；滑动模式看当前滚动位置附近）
         LaunchedEffect(pageIdx, lines, bookPath, textW, scrollMode, lineAtTop / 40) {
@@ -175,16 +217,23 @@ fun ReaderScreen(
         }
 
         // 排版（章节/字号/尺寸变化时重算）
-        LaunchedEffect(chapterIdx, fontSizePx, settings.lineSpacingOf(dark), wPx, hPx, scrollMode) {
+        LaunchedEffect(chapterIdx, fontSizePx, settings.lineSpacingOf(dark), wPx, hPx, scrollMode, statusH) {
             val ch = chapters.getOrNull(chapterIdx) ?: return@LaunchedEffect
             launch {
+                // 重排前先记下「当前停在哪个字」——改字号/行距/开关状态栏之后，
+                // 排版结果会变，但那个字不会变，靠它把读者放回原处，不会莫名跳页。
+                val anchor = lines.getOrNull(
+                    if (scrollMode) lineAtTop else (pages.getOrNull(pageIdx)?.start ?: 0)
+                )?.let { it.paraIndex to it.charStart }
+
                 val ls = LineBreaker.layout(ch.paragraphs, paint, textW, paint.textSize * 2, maxImgH)
-                val ps = PagePacker.pack(ls, hPx - padY * 2, lineHeightPx, paraGapPx)
+                val ps = PagePacker.pack(ls, bodyH, lineHeightPx, paraGapPx)
                 lines = ls
                 pages = ps
-                // 跳转优先：先按段落定位（搜索），再按页码定位（书签/目录）
+                // 定位优先级：段落跳转（搜索）> 页码（书签/目录）> 精确位置（续读/重排）
                 val para = pendingPara
                 val pg = pendingPage
+                val restore = pendingRestore ?: anchor
                 when {
                     para != null -> {
                         val li = ls.indexOfFirst { it.paraIndex == para }
@@ -192,6 +241,11 @@ fun ReaderScreen(
                         pendingPara = null
                     }
                     pg != null -> { pageIdx = pg.coerceIn(0, (ps.size - 1).coerceAtLeast(0)); pendingPage = null }
+                    restore != null -> {
+                        pendingRestore = null
+                        val li = findLineFor(ls, restore.first, restore.second)
+                        pageIdx = if (li >= 0) ps.indexOfFirst { it.start <= li && li < it.end }.coerceAtLeast(0) else 0
+                    }
                     else -> pageIdx = pageIdx.coerceIn(0, (ps.size - 1).coerceAtLeast(0))
                 }
                 // 滑动模式：把"第几页"换算成"第几行"，然后滚到那儿
@@ -257,7 +311,8 @@ fun ReaderScreen(
                 onPageDown = { goNext() },
                 onPageUp = { goPrev() },
                 hasNextChapter = chapterIdx < chapters.size - 1,
-                onNextChapter = { chapterIdx++; pageIdx = 0 }
+                onNextChapter = { chapterIdx++; pageIdx = 0 },
+                bottomInset = statusH
             )
         }
 
@@ -311,16 +366,71 @@ fun ReaderScreen(
 
         if (!scrollMode) Box(drawModifier)
 
-        // 进度保存（滑动模式用"读到第几行"折算成页，存储格式不变）
-        LaunchedEffect(chapterIdx, pageIdx, lineAtTop, scrollMode) {
-            val pageCount = pages.size.coerceAtLeast(1)
-            val frac = if (scrollMode) {
-                val p = (lineAtTop.toFloat() / lines.size.coerceAtLeast(1)).coerceIn(0f, 1f)
-                ((chapterIdx + p) / chapters.size.coerceAtLeast(1)).coerceIn(0f, 1f)
-            } else {
-                ((chapterIdx + (pageIdx + 1f) / pageCount) / chapters.size.coerceAtLeast(1)).coerceIn(0f, 1f)
+        /* ---- 进度：定位到「第几段的第几个字」，防抖落盘 + 离开前强制落盘 ---- */
+
+        // 当前读到哪儿：翻页模式看本页第一行，滚动模式看屏幕最上面那一行
+        val lineIdxNow = if (scrollMode) lineAtTop else (pages.getOrNull(pageIdx)?.start ?: 0)
+        val lineNow = lines.getOrNull(lineIdxNow.coerceIn(0, (lines.size - 1).coerceAtLeast(0)))
+        val paraNow = lineNow?.paraIndex ?: 0
+        val charNow = lineNow?.charStart ?: 0
+        val fracNow = progressOf(chapterIdx, paraNow, charNow)
+
+        // 用最新值包一层：Activity 进 onStop / 界面被收起时，调用的永远是"此刻"的位置
+        val flushRef = rememberUpdatedState<() -> Unit>({
+            onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
+        })
+        DisposableEffect(Unit) {
+            onRegisterFlush { flushRef.value() }
+            onDispose {
+                flushRef.value()          // 离开阅读页立刻落盘，不等防抖
+                onRegisterFlush(null)
             }
-            onProgress(chapterIdx, pageIdx, frac)
+        }
+
+        LaunchedEffect(chapterIdx, pageIdx, paraNow, charNow) {
+            delay(500)                    // 防抖：一路狂翻时只在停下来之后写一次
+            onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
+        }
+
+        /* ---- 底部状态栏：百分比 + 时间，可在设置里关掉 ---- */
+        LaunchedEffect(showBar, settings.statusTime) {
+            if (!showBar || !settings.statusTime) return@LaunchedEffect
+            while (true) {
+                clock = clockText()
+                delay(15_000)             // 每 15 秒对一次表，显示到分钟够用
+            }
+        }
+        if (showBar) {
+            val statusFontSp = (settings.fontSizeOf(dark) * 0.7f).sp
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, bottom = 4.dp, top = 1.dp),
+                horizontalArrangement = when {
+                    settings.statusPercent && settings.statusTime -> Arrangement.SpaceBetween
+                    settings.statusPercent -> Arrangement.Start
+                    else -> Arrangement.End
+                },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (settings.statusPercent) {
+                    Text(
+                        text = "${(fracNow * 100).roundToInt()}%",
+                        color = textColor.copy(alpha = 0.55f),
+                        fontSize = statusFontSp,
+                        maxLines = 1
+                    )
+                }
+                if (settings.statusTime) {
+                    Text(
+                        text = clock,
+                        color = textColor.copy(alpha = 0.55f),
+                        fontSize = statusFontSp,
+                        maxLines = 1
+                    )
+                }
+            }
         }
 
         // 朗读：读完本页自动翻页
@@ -588,11 +698,14 @@ private fun ScrollBody(
     onPageDown: () -> Unit,
     onPageUp: () -> Unit,
     hasNextChapter: Boolean,
-    onNextChapter: () -> Unit
+    onNextChapter: () -> Unit,
+    /** 底部状态栏占掉的高度，滚动内容要给它让位，否则最后一行被压住 */
+    bottomInset: Float = 0f
 ) {
     val density = LocalDensity.current
     val chunks = remember(lines) { lines.chunked(SCROLL_CHUNK) }
     val topPad = with(density) { padY.toDp() }
+    val bottomPad = with(density) { (padY + bottomInset).toDp() }
 
     Box(
         Modifier.fillMaxSize().pointerInput(tapPaging) {
@@ -613,7 +726,7 @@ private fun ScrollBody(
         LazyColumn(
             state = scroller,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = topPad, bottom = topPad)
+            contentPadding = PaddingValues(top = topPad, bottom = bottomPad)
         ) {
             itemsIndexed(chunks) { ci, chunk ->
                 val startGlobal = ci * SCROLL_CHUNK
@@ -907,4 +1020,26 @@ private fun TextIconButton(
             textAlign = TextAlign.Center
         )
     }
+}
+
+/** 当前时间，形如 14:35（状态栏用） */
+private fun clockText(): String =
+    java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+
+/**
+ * 在排版好的行里，找「第 para 段的第 cs 个字符」落在哪一行。
+ *
+ * 阅读进度存的是「段 + 段内偏移」而不是页码，所以换字号、换行距、开关状态栏之后
+ * 行会重新切分，但同一个字还在，靠这个函数就能把读者放回原来的地方。
+ * 找不到（比如字号变得太离谱）就逐级退让：该段最后一行 → 该段第一行。
+ */
+internal fun findLineFor(lines: List<PageLine>, para: Int, cs: Int): Int {
+    if (lines.isEmpty() || para < 0) return -1
+    val inside = lines.indexOfFirst {
+        it.paraIndex == para && it.charStart <= cs && cs < it.charStart + it.text.length.coerceAtLeast(1)
+    }
+    if (inside >= 0) return inside
+    val before = lines.indexOfLast { it.paraIndex == para && it.charStart <= cs }
+    if (before >= 0) return before
+    return lines.indexOfFirst { it.paraIndex == para }
 }

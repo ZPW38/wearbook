@@ -11,6 +11,12 @@ data class PageLine(
     val indent: Float,      // 该行左边距（px）
     val paraStart: Boolean, // 是否为段落首行
     val paraIndex: Int = 0, // 属于第几个段落（目录与搜索结果定位用）
+    /**
+     * 这一行的第一个字在该段落内的字符偏移。
+     * 阅读进度靠「段落号 + 段内偏移」定位，而不是靠页码 —— 页码是排版的产物，
+     * 字号/行距/屏幕一变就全漂了；段内偏移不依赖排版，重新排版后仍能找回同一个字。
+     */
+    val charStart: Int = 0,
     /** 插图行：非 null 时这一行画的是一张图，text 为空 */
     val img: ImageRef? = null,
     val imgW: Float = 0f,   // 该图的绘制宽度（px）
@@ -51,7 +57,7 @@ object LineBreaker {
                     w = if (ref.w > 0 && ref.h > 0) maxImgH * ref.w.toFloat() / ref.h else h * 4f / 3f
                 }
                 if (w > width) w = width
-                lines.add(PageLine("", 0f, true, pi, ref, w, h))
+                lines.add(PageLine("", 0f, true, pi, 0, ref, w, h))
                 return@forEachIndexed
             }
             var start = 0
@@ -63,7 +69,7 @@ object LineBreaker {
                 if (n <= 0) n = 1
                 var end = start + n
                 if (end < p.length && p[end] == ' ') end++     // 行首不留空格
-                lines.add(PageLine(p.substring(start, end), indent, isFirst, pi))
+                lines.add(PageLine(p.substring(start, end), indent, isFirst, pi, start))
                 start = end
                 indent = 0f
                 isFirst = false

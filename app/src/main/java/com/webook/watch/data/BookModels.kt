@@ -52,12 +52,27 @@ fun imageParagraph(path: String, w: Int, h: Int): String = "$IMG_MARK$path\u0000
 /** 取第一个「不是插图」的段落，用于给章节起标题 */
 fun Chapter.firstTextPara(): String = paragraphs.firstOrNull { parseImagePara(it) == null && it.isNotBlank() } ?: ""
 
-/** 阅读进度 */
+/**
+ * 阅读进度。
+ *
+ * 「读到哪儿」用 `para` + `charStart`（第几段的第几个字）表示，**不用页码**：
+ * 页码是排版产物，换个字号/行距/屏幕就漂了；段内偏移不依赖排版，重新排版后
+ * 依然能精确定位到同一个字。`page` 只留给老数据兜底和界面显示。
+ */
 data class Progress(
     val chapter: Int = 0,
     val page: Int = 0,
+    /** 段落号；-1 表示这条记录是老版本写的、没有精确位置 */
+    val para: Int = -1,
+    /** 该段落内的字符偏移 */
+    val charStart: Int = 0,
+    /** 全书进度 0~1（存下来给书架直接显示，省得每次重算） */
+    val frac: Float = 0f,
     val updatedAt: Long = 0L
-)
+) {
+    /** 是否有可用的精确位置 */
+    val hasExact: Boolean get() = para >= 0
+}
 
 /** 书签：记到「第几章第几页」，避免重新排版后页码漂移导致错位 */
 data class Bookmark(

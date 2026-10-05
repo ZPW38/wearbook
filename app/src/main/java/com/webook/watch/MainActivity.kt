@@ -92,6 +92,11 @@ class MainActivity : ComponentActivity() {
     private var bookmarks by mutableStateOf(listOf<com.webook.watch.data.Bookmark>())
     /** 音量键翻页：由阅读页注册，null 表示当前没有阅读页 */
     private var readerTurn: ((Boolean) -> Unit)? = null
+    /**
+     * 阅读页注册进来的「立刻保存进度」回调。
+     * 进 onStop 时调一次 —— 界面被收起、切后台、划掉任务卡，最后一次读到哪儿都能落盘。
+     */
+    private var readerFlush: (() -> Unit)? = null
 
     private val dirStack = mutableListOf<File>()
     private var entries by mutableStateOf(listOf<FmEntry>())
@@ -273,13 +278,21 @@ class MainActivity : ComponentActivity() {
                                     dark = dark,
                                     initialChapter = p?.chapter ?: 0,
                                     initialPage = p?.page ?: 0,
+                                    initialPara = p?.para ?: -1,
+                                    initialCharStart = p?.charStart ?: 0,
                                     bookmarks = bookmarks,
-                                    onProgress = { c, pg, frac ->
-                                        store.saveProgress(meta.id, com.webook.watch.data.Progress(c, pg))
+                                    onProgress = { c, pg, pa, cs, frac ->
+                                        store.saveProgress(
+                                            meta.id,
+                                            com.webook.watch.data.Progress(
+                                                chapter = c, page = pg,
+                                                para = pa, charStart = cs, frac = frac
+                                            )
+                                        )
                                         progress = progress.toMutableMap().apply { put(meta.id, frac) }
                                     },
                                     onBack = {
-                                        speaker.stop(); readerTurn = null
+                                        speaker.stop(); readerTurn = null; readerFlush = null
                                         current = null; screen = "library"; refresh()
                                     },
                                     onVibrate = { vibrate() },
@@ -295,7 +308,8 @@ class MainActivity : ComponentActivity() {
                                         store.removeBookmark(meta.id, i)
                                         bookmarks = store.bookmarks(meta.id)
                                     },
-                                    onRegisterTurn = { fn -> readerTurn = fn }
+                                    onRegisterTurn = { fn -> readerTurn = fn },
+                                    onRegisterFlush = { fn -> readerFlush = fn }
                                 )
                             }
 
@@ -484,7 +498,7 @@ class MainActivity : ComponentActivity() {
 
     private fun onBack() {
         when (screen) {
-            "reader" -> { speaker.stop(); readerTurn = null; current = null; screen = "library"; refresh() }
+            "reader" -> { speaker.stop(); readerTurn = null; readerFlush = null; current = null; screen = "library"; refresh() }
             "import", "settings" -> { screen = "library"; refresh() }
             else -> {
                 val now = System.currentTimeMillis()
@@ -498,7 +512,11 @@ class MainActivity : ComponentActivity() {
         books = store.list()
         covers.clear()
         books.forEach { b -> covers.add(b.id to store.coverBitmap(b)) }
-        progress = store.allProgress().mapValues { (_, v) -> (v.chapter + 0.001f).coerceAtMost(0.999f) }
+        // 优先用进度里存好的精确百分比；老记录没有这个字段，就按章节位置粗估一个
+        progress = store.allProgress().mapValues { (_, v) ->
+            if (v.frac > 0f) v.frac.coerceIn(0f, 1f)
+            else (v.chapter.toFloat() / books.size.coerceAtLeast(1)).coerceAtMost(0.999f)
+        }
     }
 
     private fun openBook(meta: BookMeta) {
@@ -686,6 +704,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    /**
+     * 退到后台/被系统回收前，把阅读进度强制写盘。
+     * ReaderScreen 里平时是防抖 500ms 落盘，万一这 500ms 内进程就没了，进度就白读了。
+     */
+    override fun onStop() {
+        readerFlush?.invoke()
+        super.onStop()
+    }
 
     override fun onDestroy() { speaker.shutdown(); super.onDestroy() }
 }

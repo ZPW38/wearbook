@@ -502,6 +502,11 @@ fun OtherPanel(
         SwitchRow("隐藏状态栏", settings.hideStatusbar, "全屏沉浸式阅读") { onMutate { hideStatusbar = it }; onApplySystem() }
         SwitchRow("音量键翻页", settings.volumeKeys, "音量上=上一章，音量下=下一章") { onMutate { volumeKeys = it } }
         SwitchRow("点击屏幕两侧翻页", settings.tapPaging, "关闭后点击只用来开关菜单") { onMutate { tapPaging = it } }
+        SwitchRow("底部状态栏", settings.showStatusBar, "正文最下方显示一条细状态栏") { onMutate { showStatusBar = it } }
+        if (settings.showStatusBar) {
+            SwitchRow("  · 显示百分比", settings.statusPercent, "读到全书的百分之多少") { onMutate { statusPercent = it } }
+            SwitchRow("  · 显示时间", settings.statusTime, "显示当前时间，看书时不用退出去看表") { onMutate { statusTime = it } }
+        }
         SwitchRow("翻页震动", settings.vibrate, "翻页时震一下；系统震动需为开启状态") { onMutate { vibrate = it } }
         SwitchRow("圆屏安全边距", settings.roundScreen, "圆屏手表请打开") { onMutate { roundScreen = it }; onApplySystem() }
         SwitchRow(

@@ -7,6 +7,7 @@ import com.webook.watch.parser.BookParser
 import com.webook.watch.parser.MobiParser
 import com.webook.watch.parser.PalmDoc
 import com.webook.watch.text.PageLine
+import com.webook.watch.ui.findLineFor
 import com.webook.watch.text.PagePacker
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -93,7 +94,7 @@ class CoreLogicTest {
         // 页高 100、行高 30：一张 90 高的图 + 上下各一行文字 → 恰好切成 3 页
         val ls = listOf(
             PageLine("文字", 0f, true),
-            PageLine("", 0f, true, 1, ImageRef("a.jpg", 800, 600), 100f, 90f),
+            PageLine("", 0f, true, 1, 0, ImageRef("a.jpg", 800, 600), 100f, 90f),
             PageLine("文字2", 0f, true, 2)
         )
         val pages = PagePacker.pack(ls, pageHeight = 100f, lineHeight = 30f, paraSpacing = 0f)
@@ -105,8 +106,8 @@ class CoreLogicTest {
     @Test
     fun `插图不会把页面撑破`() {
         val ls = listOf(
-            PageLine("", 0f, true, 0, ImageRef("a.jpg", 800, 600), 100f, 90f),
-            PageLine("", 0f, true, 1, ImageRef("b.jpg", 800, 600), 100f, 90f),
+            PageLine("", 0f, true, 0, 0, ImageRef("a.jpg", 800, 600), 100f, 90f),
+            PageLine("", 0f, true, 1, 0, ImageRef("b.jpg", 800, 600), 100f, 90f),
             PageLine("文字", 0f, false, 2)
         )
         val pages = PagePacker.pack(ls, 100f, 30f, 0f)
@@ -235,5 +236,65 @@ class CoreLogicTest {
             "</p><mbp:pagebreak/><p>" + "乙".repeat(120) + "</p></body></html>"
         val r = MobiParser.parse(buildMobi(body), "t.mobi")
         assertTrue("没有目录时应退回分页符切分，实际 ${r.chapters.size} 章", r.chapters.size >= 2)
+    }
+
+    /* ---------- 精确续读：段落 + 段内偏移 -> 行（1.0.21） ---------- */
+
+    /** 造一个「段落 -> 若干行」的行表，每行的 charStart 是它在段落内的偏移 */
+    private fun paraLines(vararg paraLens: Int): List<PageLine> {
+        val out = ArrayList<PageLine>()
+        paraLens.forEachIndexed { pi, len ->
+            var start = 0
+            while (start < len) {
+                val n = minOf(10, len - start)
+                out.add(
+                    PageLine(
+                        text = "x".repeat(n), indent = 0f, paraStart = start == 0,
+                        paraIndex = pi, charStart = start
+                    )
+                )
+                start += n
+            }
+        }
+        return out
+    }
+
+    @Test
+    fun findLine_locateByParagraphAndOffset() {
+        val ls = paraLines(25, 25)          // 每段 25 字 -> 每段 3 行（10/10/5）
+        // 第 1 段第 0 字 -> 第 3 行（第 0 段占 0..2）
+        assertEquals(3, findLineFor(ls, 1, 0))
+        // 第 1 段第 12 字 -> 第 4 行（10..19 这一行）
+        assertEquals(4, findLineFor(ls, 1, 12))
+        // 第 0 段第 20 字 -> 第 2 行（20..24 这一行）
+        assertEquals(2, findLineFor(ls, 0, 20))
+    }
+
+    @Test
+    fun findLine_survivesReflow() {
+        // 换字号后每行装的字数变了（每行 7 字），段内偏移依然能对上
+        val ls = ArrayList<PageLine>()
+        ls.add(PageLine("x".repeat(7), 0f, true, 0, 0))
+        ls.add(PageLine("x".repeat(7), 0f, false, 0, 7))
+        ls.add(PageLine("x".repeat(6), 0f, false, 0, 14))
+        // 存下来的是「第 0 段第 12 字」——重排后落在 7..13 这一行
+        assertEquals(1, findLineFor(ls, 0, 12))
+        // 第 20 字 -> 14..19 这一行
+        assertEquals(2, findLineFor(ls, 0, 20))
+    }
+
+    @Test
+    fun findLine_fallsBackWhenOffsetBeyondParagraph() {
+        val ls = paraLines(25)
+        // 字号变小、段落变短了：偏移超出该段 -> 退到该段最后一行，而不是跑飞
+        assertEquals(2, findLineFor(ls, 0, 999))
+    }
+
+    @Test
+    fun findLine_returnsMinusOneForMissingParagraph() {
+        val ls = paraLines(25)
+        assertEquals(-1, findLineFor(ls, 5, 0))
+        assertEquals(-1, findLineFor(emptyList(), 0, 0))
+        assertEquals(-1, findLineFor(ls, -1, 0))
     }
 }
