@@ -2,10 +2,12 @@ package com.webook.watch.ui
 
 import com.webook.watch.R
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -52,7 +54,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -60,10 +64,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.webook.watch.data.Bookmark
 import com.webook.watch.data.Chapter
+import com.webook.watch.data.ImageRef
 import com.webook.watch.data.SearchHit
 import com.webook.watch.data.Settings
 import com.webook.watch.data.parseImagePara
@@ -132,6 +139,8 @@ fun ReaderScreen(
     var clock by remember { mutableStateOf("") }
     var speaking by remember { mutableStateOf(false) }
     var panel by remember { mutableStateOf(Panel.NONE) }
+    /** 正在放大查看的插图（null = 没在放大）。手表屏小，正文里的图看不清细节，点开看大图 */
+    var zoomImage by remember { mutableStateOf<ImageRef?>(null) }
 
     // 订阅设置变化：设置一改，本页（含各个面板）就会重新读取最新的值
     settings.rev
@@ -312,6 +321,7 @@ fun ReaderScreen(
                 onPageUp = { goPrev() },
                 hasNextChapter = chapterIdx < chapters.size - 1,
                 onNextChapter = { chapterIdx++; pageIdx = 0 },
+                onImageTap = { zoomImage = it; onVibrate() },
                 bottomInset = statusH
             )
         }
@@ -348,6 +358,15 @@ fun ReaderScreen(
                 detectTapGestures(
                     onLongPress = { showOverlay = true },
                     onTap = { offset ->
+                        // 点在插图上 -> 放大查看（比翻页优先，否则点图会翻页）
+                        val hit = pages.getOrNull(pageIdx)?.let { pg ->
+                            imageRectsInRange(
+                                lines, pg.start, pg.end, padY, padX, textW,
+                                lineHeightPx, 0f, paint
+                            ).firstOrNull { it.second.contains(offset.x, offset.y) }?.first
+                        }
+                        if (hit != null) { zoomImage = hit; onVibrate(); return@detectTapGestures }
+
                         val w = size.width
                         if (!settings.tapPaging) { showOverlay = !showOverlay; return@detectTapGestures }
                         when {
@@ -600,6 +619,11 @@ fun ReaderScreen(
             }
             Panel.NONE -> Unit
         }
+
+        // 插图放大查看：盖在最上层（连菜单也盖住，专心看图）
+        zoomImage?.let { ref ->
+            ImageZoomView(bookPath = bookPath, ref = ref, onClose = { zoomImage = null })
+        }
     }
 }
 
@@ -699,6 +723,8 @@ private fun ScrollBody(
     onPageUp: () -> Unit,
     hasNextChapter: Boolean,
     onNextChapter: () -> Unit,
+    /** 点到了正文插图（放大查看） */
+    onImageTap: (ImageRef) -> Unit = {},
     /** 底部状态栏占掉的高度，滚动内容要给它让位，否则最后一行被压住 */
     bottomInset: Float = 0f
 ) {
@@ -712,6 +738,25 @@ private fun ScrollBody(
             detectTapGestures(
                 onLongPress = { onTapCenter() },
                 onTap = { offset ->
+                    // 点在插图上 -> 放大查看。滚动模式下要先把屏幕坐标换算到「第几块的第几行」：
+                    // 用 LazyColumn 的可见项偏移，chunk 的起始行号就是它在全书里的行号。
+                    val hit = run {
+                        val info = scroller.layoutInfo
+                        for (item in info.visibleItemsInfo) {
+                            val chunk = chunks.getOrNull(item.index) ?: continue
+                            if (offset.y < item.offset || offset.y >= item.offset + item.size) continue
+                            val startG = item.index * SCROLL_CHUNK
+                            val r = imageRectsInRange(
+                                lines, startG, startG + chunk.size,
+                                item.offset.toFloat(), padX, textW,
+                                lineHeightPx, paraGapPx, paint
+                            ).firstOrNull { it.second.contains(offset.x, offset.y) }?.first
+                            if (r != null) return@run r
+                        }
+                        null
+                    }
+                    if (hit != null) { onImageTap(hit); return@detectTapGestures }
+
                     val w = size.width
                     if (!tapPaging) { onTapCenter(); return@detectTapGestures }
                     when {
@@ -1042,4 +1087,143 @@ internal fun findLineFor(lines: List<PageLine>, para: Int, cs: Int): Int {
     val before = lines.indexOfLast { it.paraIndex == para && it.charStart <= cs }
     if (before >= 0) return before
     return lines.indexOfFirst { it.paraIndex == para }
+}
+
+/**
+ * 算出 [from, to) 这段行里所有插图的绘制矩形。
+ *
+ * 存在的意义是「绘制」和「点击命中」必须用同一套坐标，否则会出现"看着点中了却没反应"。
+ * 所以这里的累加逻辑与两处 onDrawBehind 严格一致：
+ *   - 翻页模式：y 从 -ascent 起，每行 += lineHeight；插图行 += 它自己的高度（**不加段间距**，因为翻页绘制也没加）
+ *   - 滑动模式：同样，但**要加段间距**（滚动绘制加了），所以 paraGap 传 paraGapPx
+ *
+ * @param baseY 这段内容「第一行行顶」对应的屏幕 y（翻页传 padY；滚动传 LazyColumn item 的 offset）
+ * @param paraGap 段间距，翻页模式传 0
+ */
+private fun imageRectsInRange(
+    lines: List<PageLine>,
+    from: Int,
+    to: Int,
+    baseY: Float,
+    padX: Float,
+    textW: Float,
+    lineHeightPx: Float,
+    paraGap: Float,
+    paint: android.graphics.Paint
+): List<Pair<ImageRef, android.graphics.RectF>> {
+    val out = ArrayList<Pair<ImageRef, android.graphics.RectF>>()
+    if (from >= to || lines.isEmpty()) return out
+    val ascent = paint.fontMetrics.ascent
+    var y = -ascent
+    for (i in from until to) {
+        val ln = lines.getOrNull(i) ?: break
+        if (paraGap > 0f && i > 0 && ln.paraStart) y += paraGap
+        val ref = ln.img
+        if (ref != null) {
+            if (ln.imgW > 0f && ln.imgH > 0f) {
+                val left = padX + (textW - ln.imgW) / 2f
+                val top = baseY + y + ascent
+                out.add(ref to android.graphics.RectF(left, top, left + ln.imgW, top + ln.imgH))
+            }
+            y += ln.height(lineHeightPx)
+        } else {
+            y += lineHeightPx
+        }
+    }
+    return out
+}
+
+/**
+ * 插图放大查看层。
+ *
+ * 手表屏幕小，正文里的插图最多只占版面 62%，细节（地图、示意图、族谱）根本看不清。
+ * 点一下图就撑满屏幕看，**单指拖动**平移看局部，再点一下退出 —— 全程不需要双指缩放，
+ * 因为手表上双指手势本来就很难做出来。
+ *
+ * 这里会**按更高的分辨率重新解码一次**：正文里那张是按正文宽度降采样的，直接放大是糊的。
+ */
+@Composable
+private fun ImageZoomView(
+    bookPath: String?,
+    ref: ImageRef,
+    onClose: () -> Unit
+) {
+    var bmp by remember(ref) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var loaded by remember(ref) { mutableStateOf(false) }
+    var offset by remember(ref) { mutableStateOf(Offset.Zero) }
+    var showHint by remember(ref) { mutableStateOf(true) }
+
+    LaunchedEffect(ref, bookPath) {
+        bmp = withContext(Dispatchers.IO) {
+            // 1000px 足够手表屏放大看，又不至于把 96MB 的堆吃满
+            EpubImages.load(bookPath, ref, 1000)
+        }
+        loaded = true
+    }
+    LaunchedEffect(ref) {
+        delay(2600)
+        showHint = false
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.95f))
+    ) {
+        val img = bmp
+        if (img != null) {
+            Canvas(
+                Modifier
+                    .fillMaxSize()
+                    // 拖动平移。detectDragGestures 用 requireUnconsumed=false 起手，
+                    // 所以和下面的点击检测可以共存，不会互相抢事件。
+                    .pointerInput(ref) {
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            offset = Offset(offset.x + drag.x, offset.y + drag.y)
+                        }
+                    }
+                    .pointerInput(ref) {
+                        detectTapGestures { onClose() }
+                    }
+            ) {
+                val iw = img.width.toFloat()
+                val ih = img.height.toFloat()
+                if (iw <= 0f || ih <= 0f) return@Canvas
+                // 撑满屏幕宽度 = 放大；高度超出屏幕的部分靠单指拖出来看
+                val k = size.width / iw
+                val dw = iw * k
+                val dh = ih * k
+                val left = (size.width - dw) / 2f + offset.x
+                val top = if (dh > size.height) offset.y else (size.height - dh) / 2f + offset.y
+                drawImage(
+                    image = img.asImageBitmap(),
+                    dstOffset = IntOffset(left.roundToInt(), top.roundToInt()),
+                    dstSize = IntSize(dw.roundToInt(), dh.roundToInt())
+                )
+            }
+            AnimatedVisibility(
+                visible = showHint,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                Text(
+                    "拖动看细节 · 点一下关闭",
+                    color = Color.White.copy(alpha = 0.8f),
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(bottom = 14.dp)
+                )
+            }
+        } else if (loaded) {
+            Text(
+                "插图不可用\n原文件可能已被移动或删除",
+                color = Color.White.copy(alpha = 0.75f),
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.align(Alignment.Center).padding(24.dp)
+            )
+            Box(Modifier.fillMaxSize().pointerInput(ref) { detectTapGestures { onClose() } })
+        }
+    }
 }
