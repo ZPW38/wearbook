@@ -170,13 +170,17 @@ java -jar "$BT/lib/apksigner.jar" sign \
 
 ## 七、开源与许可
 
-- **许可证**：MIT（见 `LICENSE`）。发布前记得把版权人换成你自己的名字。
-  想换成 Apache-2.0（同样宽松、额外含专利授权）或 GPL-3.0（要求衍生作品也开源）只需替换该文件。
+- **许可证**：**GNU GPL-3.0**（见 `LICENSE`）· Copyright (C) 2026 ZPW38
+  你可以自由使用、修改、分发本项目，**但衍生作品必须同样以 GPL 开源** —— 不允许闭源。
+  （注意：GPL **不禁止商用**，别人照样可以卖，只是必须开源。）
+- **为什么选 GPL 而不是 MIT**：MIT 允许别人拿本项目做**闭源**产品（改完不公开代码）。
+  选 GPL-3.0 是为了保证腕上书及其衍生作品**永远保持开源**。
 - **第三方资源与依赖**
   - 界面图标：**Google Material Symbols**（Apache-2.0）。原始 SVG 与转换脚本在 `tools/icons/`，转换产物是 `app/src/main/res/drawable/ic_*.xml`。
-  - 依赖库：AndroidX / Jetpack Compose / Kotlin 等，均为 Apache-2.0 等宽松许可，可自由分发。
+  - 依赖库：AndroidX / Jetpack Compose / Kotlin 等，均为 Apache-2.0 等宽松许可。
+    宽松协议可单向并入 GPL 项目，因此本项目以 GPL-3.0 使用这些依赖**完全合法**。
   - 本项目**没有**使用任何第三方电子书解析库：EPUB 用 `java.util.zip.ZipFile` + `XmlPullParser`，MOBI/PalmDOC 是手写解压。
-  - 交互设计参考了开源阅读（Legado）的帮助文档，但**没有拷贝它的代码**。注意 Legado 是 GPL-3.0：以后若想借用它的代码，整个项目需要改成 GPL-3.0。
+  - 交互设计参考了开源阅读（Legado）的帮助文档。Legado 同为 GPL-3.0，**本项目现在也是 GPL-3.0，因此今后可以直接借鉴其代码**（引用处请注明来源）。
 - **权限说明**（将来上架应用商店时要留意）
   - `MANAGE_EXTERNAL_STORAGE`（所有文件访问）：安卓 11+ 下 `File.listFiles()` 只返回媒体文件，为了能在应用内浏览并导入电子书才需要它。Google Play 对此权限审核严格，若上架可改用 SAF 或「分享到应用」的方式。
   - `VIBRATE`、`READ_EXTERNAL_STORAGE`（安卓 10 及以下）。
