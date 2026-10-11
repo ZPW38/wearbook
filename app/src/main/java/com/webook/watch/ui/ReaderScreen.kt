@@ -2,7 +2,9 @@ package com.webook.watch.ui
 
 import com.webook.watch.R
 
+import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Canvas
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -15,12 +17,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -1151,6 +1155,8 @@ private fun ImageZoomView(
     var bmp by remember(ref) { mutableStateOf<android.graphics.Bitmap?>(null) }
     var loaded by remember(ref) { mutableStateOf(false) }
     var offset by remember(ref) { mutableStateOf(Offset.Zero) }
+    // 1f = 撑满屏幕宽度；>1 表示用户手动放大；封顶 3f 防止把手表 96MB 堆吃爆
+    var scale by remember(ref) { mutableStateOf(1f) }
     var showHint by remember(ref) { mutableStateOf(true) }
 
     LaunchedEffect(ref, bookPath) {
@@ -1165,6 +1171,10 @@ private fun ImageZoomView(
         showHint = false
     }
 
+    // 兜底：少数手表有物理侧键，桌面 / 投屏模式下也有系统返回手势。
+    // 主入口是下面的返回按钮，这里只是多一条退路。
+    BackHandler { onClose() }
+
     Box(
         Modifier
             .fillMaxSize()
@@ -1175,23 +1185,25 @@ private fun ImageZoomView(
             Canvas(
                 Modifier
                     .fillMaxSize()
-                    // 拖动平移。detectDragGestures 用 requireUnconsumed=false 起手，
-                    // 所以和下面的点击检测可以共存，不会互相抢事件。
-                    .pointerInput(ref) {
-                        detectDragGestures { change, drag ->
-                            change.consume()
-                            offset = Offset(offset.x + drag.x, offset.y + drag.y)
-                        }
+                // 拖动平移。detectDragGestures 用 requireUnconsumed=false 起手，
+                // 所以和下面的点击检测可以共存，不会互相抢事件。
+                .pointerInput(ref) {
+                    detectDragGestures { change, drag ->
+                        change.consume()
+                        offset = Offset(offset.x + drag.x, offset.y + drag.y)
                     }
-                    .pointerInput(ref) {
-                        detectTapGestures { onClose() }
-                    }
+                }
+                .pointerInput(ref) {
+                    // 只有在未放大（scale==1）时点一下才关闭；放大后点一下留给看图，
+                    // 避免看图时误触闪退出界面。放大态下只能靠「返回」按钮退出。
+                    detectTapGestures { if (scale <= 1.001f) onClose() }
+                }
             ) {
                 val iw = img.width.toFloat()
                 val ih = img.height.toFloat()
                 if (iw <= 0f || ih <= 0f) return@Canvas
-                // 撑满屏幕宽度 = 放大；高度超出屏幕的部分靠单指拖出来看
-                val k = size.width / iw
+                // 撑满屏幕宽度 = 1f；再乘 scale 即为用户手动放大的倍率
+                val k = (size.width / iw) * scale
                 val dw = iw * k
                 val dh = ih * k
                 val left = (size.width - dw) / 2f + offset.x
@@ -1209,10 +1221,10 @@ private fun ImageZoomView(
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 Text(
-                    "拖动看细节 · 点一下关闭",
+                    "单指拖动可查看细节",
                     color = Color.White.copy(alpha = 0.8f),
                     style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(bottom = 14.dp)
+                    modifier = Modifier.padding(bottom = 80.dp)
                 )
             }
         } else if (loaded) {
@@ -1224,6 +1236,97 @@ private fun ImageZoomView(
                 modifier = Modifier.align(Alignment.Center).padding(24.dp)
             )
             Box(Modifier.fillMaxSize().pointerInput(ref) { detectTapGestures { onClose() } })
+        }
+
+        /**
+         * 底部居中的常驻工具条：返回 / 放大 / 缩小 三个按钮并排。
+         *
+         * 手表（尤其圆屏）**没有物理返回键**，而左边缘侧滑返回又被本应用主动禁用了
+         * （1.0.8 起，为的是阅读时从左边缘划一下是翻页而不是误退出）——
+         * 所以这一层只能自己给看得见的出口，不能指望系统手势。
+         *
+         * 放底部居中而不是右上角：圆屏四角是弧形，角上摆按钮既难看又难点。
+         * 放大/缩小和返回放一起，单手拇指一横扫就够到，不用够角。
+         */
+        Surface(
+            color = Color.Black.copy(alpha = 0.45f),
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 24.dp)
+                .height(44.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            ) {
+                ZoomBarButton(
+                    icon = R.drawable.ic_arrow_back,
+                    label = "返回",
+                    onClick = onClose
+                )
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .height(24.dp)
+                        .background(Color.White.copy(alpha = 0.25f))
+                )
+                ZoomBarButton(
+                    icon = R.drawable.ic_add,
+                    label = "放大",
+                    onClick = { scale = (scale * 1.4f).coerceAtMost(3f) }
+                )
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .height(24.dp)
+                        .background(Color.White.copy(alpha = 0.25f))
+                )
+                ZoomBarButton(
+                    icon = R.drawable.ic_remove,
+                    label = "缩小",
+                    onClick = {
+                        scale = (scale / 1.4f).coerceAtLeast(1f)
+                        if (scale <= 1.001f) offset = Offset.Zero
+                    }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 缩放工具条上的单个按钮：图标 + 文字。点击反馈交给 Surface 自带涟漪。
+ */
+@Composable
+private fun ZoomBarButton(
+    @DrawableRes icon: Int,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.height(44.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(horizontal = 12.dp)
+        ) {
+            Icon(
+                painter = painterResource(icon),
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.95f),
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                label,
+                color = Color.White.copy(alpha = 0.95f),
+                style = MaterialTheme.typography.labelMedium
+            )
         }
     }
 }
