@@ -66,6 +66,29 @@ class Settings(ctx: Context) {
         get() = sp.getFloat("rate", 0.95f)
         set(v) = sp.edit().putFloat("rate", v).apply()
 
+    /**
+     * 界面缩放（等效 DPI）。
+     * 1.0 = 系统标准；>1 元素更大（density 变小）；<1 元素更小。
+     * 手表屏幕小、系统 DPI 又常常标得很高，字和按钮会显得极小，这个值就是给那种情况用的。
+     */
+    var uiScale: Float
+        get() = sp.getFloat("uiScale", 1f).coerceIn(0.80f, 1.25f)
+        set(v) { sp.edit().putFloat("uiScale", v.coerceIn(0.80f, 1.25f)).apply() }
+
+    /**
+     * 模拟屏幕规格，形如 "320x360"；"auto" 表示按真实屏幕走。
+     * 选一个比当前屏幕小的规格，界面会缩进那个比例的黑框里 —— 用来在手机上预览手表效果，
+     * 或者在大屏设备上验证小屏布局有没有被裁（本项目吃过好几次这个亏）。
+     */
+    var simScreen: String
+        get() = sp.getString("simScreen", "auto") ?: "auto"
+        set(v) { sp.edit().putString("simScreen", v).apply() }
+
+    /** 首次启动引导是否已完成 */
+    var firstRunDone: Boolean
+        get() = sp.getBoolean("firstRunDone", false)
+        set(v) { sp.edit().putBoolean("firstRunDone", v).apply() }
+
     /** 圆屏安全边距 */
     var roundScreen: Boolean
         get() = sp.getBoolean("round", true)
@@ -79,11 +102,6 @@ class Settings(ctx: Context) {
     var scanDirs: String
         get() = sp.getString("scanDirs", "") ?: ""
         set(v) { sp.edit().putString("scanDirs", v).apply() }
-
-    /** 翻页震动 */
-    var vibrate: Boolean
-        get() = sp.getBoolean("vib", true)
-        set(v) = sp.edit().putBoolean("vib", v).apply()
 
     /* ---------------- 1.0.5 新增 ---------------- */
 

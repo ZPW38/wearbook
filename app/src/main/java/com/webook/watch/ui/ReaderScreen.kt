@@ -123,7 +123,6 @@ fun ReaderScreen(
     /** 章、页、段、段内偏移、全书进度 0~1 */
     onProgress: (Int, Int, Int, Int, Float) -> Unit,
     onBack: () -> Unit,
-    onVibrate: () -> Unit,
     onMutate: (Settings.() -> Unit) -> Unit, // 改设置并立即生效
     onThemeToggle: () -> Unit,
     onBrightness: (Float) -> Unit,
@@ -321,7 +320,7 @@ fun ReaderScreen(
          * 3. 立刻 scrollToItem(0, 0) 把列表钉回顶部，同时**掐断**正在跑的惯性滚动，
          *    否则旧章的 fling 会继续把新章往下带。
          */
-        fun gotoChapter(n: Int, vibrateNow: Boolean = true) {
+        fun gotoChapter(n: Int) {
             val t = n.coerceIn(0, chapters.lastIndex.coerceAtLeast(0))
             if (t == chapterIdx) return
             chapterIdx = t
@@ -331,7 +330,6 @@ fun ReaderScreen(
             pendingPara = null
             pendingRestore = null
             if (scrollMode) scope.launch { scroller.scrollToItem(0, 0) }
-            if (vibrateNow) onVibrate()
         }
 
         fun goNext(auto: Boolean = false) {
@@ -346,15 +344,14 @@ fun ReaderScreen(
                     // ⚠️ 必须核对 chapterIdx：动画要跑 380ms，这期间用户可能已经点了"下一章"。
                     // 早先没核对，新章（往往很短）立刻就是"滚到底"，于是**一次点击连翻两章**。
                     if (chapterIdx == chAtStart && !scroller.canScrollForward && chAtStart < chapters.size - 1) {
-                        gotoChapter(chAtStart + 1, vibrateNow = false)
+                        gotoChapter(chAtStart + 1)
                     }
                 }
-                if (!auto) onVibrate()
                 return
             }
             scope.launch { slide.snapTo(wPx); slide.animateTo(0f, tween(220)) }
-            if (pageIdx < pages.size - 1) { pageIdx++; if (!auto) onVibrate() }
-            else if (chapterIdx < chapters.size - 1) gotoChapter(chapterIdx + 1, vibrateNow = !auto)
+            if (pageIdx < pages.size - 1) { pageIdx++ }
+            else if (chapterIdx < chapters.size - 1) gotoChapter(chapterIdx + 1)
         }
         fun goPrev() {
             if (pages.isEmpty()) return
@@ -363,11 +360,10 @@ fun ReaderScreen(
                 scope.launch {
                     scroller.animateScrollBy(-hPx * 0.92f, tween(SCROLL_TURN_MS, easing = LinearEasing))
                 }
-                onVibrate()
                 return
             }
             scope.launch { slide.snapTo(-wPx); slide.animateTo(0f, tween(220)) }
-            if (pageIdx > 0) { pageIdx--; onVibrate() }
+            if (pageIdx > 0) { pageIdx-- }
             else if (chapterIdx > 0) gotoChapter(chapterIdx - 1)
         }
 
@@ -403,7 +399,7 @@ fun ReaderScreen(
                 onPageUp = { goPrev() },
                 hasNextChapter = chapterIdx < chapters.size - 1,
                 onNextChapter = { gotoChapter(chapterIdx + 1) },
-                onImageTap = { zoomImage = it; onVibrate() },
+                onImageTap = { zoomImage = it },
                 bottomInset = statusH
             )
         }
@@ -456,11 +452,11 @@ fun ReaderScreen(
                     // 所以点插图经常变成弹菜单；现在长按图 = 看图，只有按空白才开菜单。
                     onLongPress = { pos ->
                         val hit = hitImageAt(pos.x, pos.y)
-                        if (hit != null) { zoomImage = hit; onVibrate() } else showOverlay = true
+                        if (hit != null) { zoomImage = hit } else showOverlay = true
                     },
                     onTap = { offset ->
                         val hit = hitImageAt(offset.x, offset.y)
-                        if (hit != null) { zoomImage = hit; onVibrate(); return@detectTapGestures }
+                        if (hit != null) { zoomImage = hit; return@detectTapGestures }
 
                         val w = size.width
                         if (!settings.tapPaging) { showOverlay = !showOverlay; return@detectTapGestures }
@@ -744,7 +740,6 @@ fun ReaderScreen(
                 images = list,
                 startIndex = start,
                 onClose = { zoomImage = null },
-                onVibrate = onVibrate
             )
         }
     }
@@ -1292,7 +1287,6 @@ private fun ImageZoomView(
     images: List<ImageRef>,
     startIndex: Int,
     onClose: () -> Unit,
-    onVibrate: () -> Unit
 ) {
     val total = images.size
     /** 当前看的是第几张（0 起） */
@@ -1320,11 +1314,9 @@ private fun ImageZoomView(
 
     fun goTo(target: Int) {
         if (target !in 0 until total || target == index) {
-            onVibrate()   // 已经是第一张 / 最后一张：震一下，让用户知道是到头了而不是没点到
             return
         }
         index = target
-        onVibrate()
     }
 
     LaunchedEffect(ref.path, bookPath) {

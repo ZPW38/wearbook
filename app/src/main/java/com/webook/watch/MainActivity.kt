@@ -36,9 +36,19 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
+import com.webook.watch.ui.FirstRunScreen
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,6 +97,9 @@ class MainActivity : ComponentActivity() {
         settingsVersion++
     }
 
+    // ⚠️ 这里**不能**写成 if (settings.firstRunDone) ... —— settings 是 lateinit，
+    // 在属性初始化阶段还没赋值，会抛 "lateinit property settings has not been initialized"
+    // 并直接崩溃在 Activity 构造期。首次启动的判断挪到 onCreate 里做。
     private var screen by mutableStateOf("library")
     private var books by mutableStateOf(listOf<BookMeta>())
     private val covers = mutableStateListOf<Pair<String, Bitmap?>>()
@@ -223,6 +236,8 @@ class MainActivity : ComponentActivity() {
         settings = Settings(this)
         speaker = Speaker(this)
         speaker.rate = settings.speechRate
+        // 首次启动：先进引导页认屏幕，选完才进书架
+        if (!settings.firstRunDone) screen = "firstrun"
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         applySystemSettings()        // 常亮 / 状态栏 / 屏幕方向 / 亮度
@@ -243,7 +258,31 @@ class MainActivity : ComponentActivity() {
                 "dark" -> true
                 else -> isSystemInDarkTheme()
             }
+            // 界面缩放（等效调 DPI）：density 变小 → 同样的 dp 占更多像素 → 元素整体变大。
+            // 手表为了塞进更多内容，系统 density 往往标得很高，字小到看不清，这一层就是给它的解药。
+            val baseDensity = LocalDensity.current
+            val scaledDensity = Density(
+                density = baseDensity.density / settings.uiScale.coerceIn(0.8f, 1.25f),
+                fontScale = baseDensity.fontScale
+            )
+            CompositionLocalProvider(LocalDensity provides scaledDensity) {
+            // 模拟屏幕规格：把界面锁进指定宽高比并居中，周围补黑 —— 不改设备，只约束预览
+            val simRatio: Float? = remember(settings.simScreen) {
+                val parts = settings.simScreen.split('x')
+                if (parts.size == 2) {
+                    val w = parts[0].toFloatOrNull()
+                    val h = parts[1].toFloatOrNull()
+                    if (w != null && h != null && h > 0f) w / h else null
+                } else null
+            }
             WearBookTheme(darkTheme = dark) {
+                // 模拟屏幕规格时，外面这层负责补黑边并居中；平时它完全透明、不参与视觉
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(if (simRatio != null) Color.Black else Color.Transparent),
+                    contentAlignment = Alignment.Center
+                ) {
                 // 根容器铺满主题背景色（这是深浅色切换时背景不变的原因）
                 val bg by animateColorAsState(MaterialTheme.colorScheme.background, tween(280), label = "bg")
                 // 用 Surface 兜底：保证整屏底色一定被画出来（投屏 / 多屏协同时不会透出窗口的白色底），
@@ -252,6 +291,7 @@ class MainActivity : ComponentActivity() {
                     color = bg,
                     contentColor = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.fillMaxSize()
+                        .then(if (simRatio != null) Modifier.aspectRatio(simRatio) else Modifier)
                 ) {
                 Box(
                     Modifier
@@ -273,13 +313,21 @@ class MainActivity : ComponentActivity() {
                         label = "screen"
                     ) { s ->
                         when (s) {
+                            "firstrun" -> FirstRunScreen(
+                                settings = settings,
+                                screenW = resources.displayMetrics.widthPixels,
+                                screenH = resources.displayMetrics.heightPixels,
+                                screenDpi = resources.displayMetrics.densityDpi,
+                                onDone = { screen = "library"; refresh() }
+                            )
+
                             "library" -> LibraryScreen(
                                 books = books,
                                 covers = covers.toMap(),
                                 progress = progress,
                                 onOpen = { openBook(it) },
                                 onDelete = { meta -> confirm = Confirm("删除《${meta.title}》？",
-                                    "图书内容和阅读进度将一并删除，且无法恢复。") { store.remove(meta.id); vibrate(); refresh() } },
+                                    "图书内容和阅读进度将一并删除，且无法恢复。") { store.remove(meta.id); refresh() } },
                                 onImport = { screen = "import"; ensureStoragePermission() },
                                 onScan = { scanAndCollect() },
                                 scanning = scanning,
@@ -314,7 +362,6 @@ class MainActivity : ComponentActivity() {
                                         speaker.stop(); readerTurn = null; readerFlush = null
                                         current = null; screen = "library"; refresh()
                                     },
-                                    onVibrate = { vibrate() },
                                     onMutate = { block -> mutate(block) },
                                     onThemeToggle = { mutate { theme = if (dark) "light" else "dark" } },
                                     onBrightness = { v -> applyBrightness(v) },
@@ -445,7 +492,9 @@ class MainActivity : ComponentActivity() {
                 }
                 }
             }
+                }
         }
+            }
     }
 
     /** singleton，别的 App 再次「分享/打开」时不会重建 Activity */
@@ -870,18 +919,6 @@ class MainActivity : ComponentActivity() {
         }.getOrNull()
     }
 
-    private fun vibrate() {
-        if (!settings.vibrate) return
-        val v = if (Build.VERSION.SDK_INT >= 31) {
-            getSystemService(android.os.VibratorManager::class.java)?.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION") getSystemService(VIBRATOR_SERVICE) as? android.os.Vibrator
-        }
-        runCatching {
-            if (Build.VERSION.SDK_INT >= 26) v?.vibrate(android.os.VibrationEffect.createOneShot(12, 60))
-            else @Suppress("DEPRECATION") v?.vibrate(12)
-        }
-    }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 

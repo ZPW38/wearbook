@@ -15,9 +15,6 @@
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
-    <!-- 翻页震动反馈：普通权限，声明即可、不需要运行时申请。
-         漏声明的表现就是"震动开关点了没反应"（华为等机型会静默失败） -->
-    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- 链接导入：把一个 http(s) 直链下载成书。
          只有"直链"能用 —— 需要登录 / 验证码 / 绕过访问控制才能拿到的内容，这里同样下不到，

@@ -35,6 +35,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -66,7 +67,6 @@ fun SettingsScreen(
     var rate by remember { mutableStateOf(settings.speechRate) }
     var theme by remember { mutableStateOf(settings.theme) }
     var round by remember { mutableStateOf(settings.roundScreen) }
-    var vib by remember { mutableStateOf(settings.vibrate) }
     var edge by remember { mutableStateOf(settings.blockEdgeSwipe) }
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
@@ -154,8 +154,144 @@ fun SettingsScreen(
             }
 
             SwitchRow("圆屏手表模式", round) { round = it; settings.roundScreen = it; onChange() }
-            SwitchRow("翻页震动反馈", vib) { vib = it; settings.vibrate = it; onChange() }
             SwitchRow("禁用左边缘侧滑返回", edge) { edge = it; settings.blockEdgeSwipe = it; onChange() }
+
+            /* 界面缩放：等效调 DPI —— 手表系统 density 普遍偏高，字会小到看不清 */
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        "界面缩放（等效 DPI）",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "字和按钮整体放大缩小。手表系统报的 DPI 往往偏高，界面会显得很小，调大一档就舒服了。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            "小" to 0.88f,
+                            "标准" to 1f,
+                            "大" to 1.14f,
+                            "特大" to 1.25f
+                        ).forEach { (label, v) ->
+                            val selected = kotlin.math.abs(settings.uiScale - v) < 0.02f
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.weight(1f).clickable {
+                                    settings.uiScale = v
+                                    onChange()
+                                }
+                            ) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    textAlign = TextAlign.Center,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            /* 屏幕规格：只做预览约束，不改设备 */
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        "屏幕规格（预览）",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "选一个规格，界面会被限制在该比例的黑框里居中显示 —— 用来在大屏设备上验证手表布局有没有被裁。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                    Text(
+                        "本机：" + LocalContext.current.resources.displayMetrics.let {
+                            "${it.widthPixels} × ${it.heightPixels} · ${it.densityDpi} dpi"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 5.dp)
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("auto", "320x360", "360x360", "454x454").forEach { v ->
+                            val selected = settings.simScreen == v
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.weight(1f).clickable {
+                                    settings.simScreen = v
+                                    onChange()
+                                }
+                            ) {
+                                Text(
+                                    if (v == "auto") "本机" else v.replace("x", "×"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    textAlign = TextAlign.Center,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            /* 音量键翻页：以前只在阅读面板里有，很多人找不到，这里也放一份 */
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "音量键翻页",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "音量上 = 上一章，音量下 = 下一章（仅在阅读页生效）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                    Switch(
+                        checked = settings.volumeKeys,
+                        onCheckedChange = { settings.volumeKeys = it; onChange() }
+                    )
+                }
+            }
 
             Surface(
                 shape = RoundedCornerShape(16.dp),
