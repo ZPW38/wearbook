@@ -3,12 +3,14 @@ package com.webook.watch.ui
 import com.webook.watch.R
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,10 +18,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -44,6 +52,10 @@ fun ImportScreen(
     hasPermission: Boolean,
     needAllFiles: Boolean,
     storageBlocked: Boolean,
+    /** 链接导入的进行中状态 / 失败原因（null = 空闲） */
+    urlJob: com.webook.watch.data.UrlImport.Job?,
+    onUrlImport: (String) -> Unit,
+    onUrlDismiss: () -> Unit,
     onOpen: (FmEntry) -> Unit,
     onGoUp: () -> Unit,
     onBack: () -> Unit,
@@ -51,6 +63,8 @@ fun ImportScreen(
     onOpenAllFiles: () -> Unit,
     onOpenAppDir: () -> Unit
 ) {
+    var urlText by remember { mutableStateOf("") }
+    val busy = urlJob != null
     Column(Modifier.fillMaxSize()) {
         Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -138,9 +152,17 @@ fun ImportScreen(
             }
         }
 
+        /* 链接导入：填一个能直接下载的 http(s) 直链，书就落到书架里 */
+        UrlImportCard(
+            job = urlJob,
+            url = urlText,
+            onUrlChange = { urlText = it },
+            onStart = onUrlImport,
+            onDismiss = onUrlDismiss
+        )
+
         when {
-            !hasPermission -> Column(
-                Modifier.fillMaxSize().padding(16.dp),
+            !hasPermission -> Column(                Modifier.fillMaxSize().padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -250,4 +272,111 @@ fun ImportScreen(
             }
         }
     }
+}
+
+/**
+ * 链接导入卡片。
+ *
+ * 只做一件事：把用户填的 http(s) 直链下载成书。能不能下取决于那个链接本身 ——
+ * 无痕窗口里不登录就能存成文件的链接，这里就能下；需要登录或验证码的，这里同样下不到。
+ * 这里不做任何站点适配、不注入 Cookie，也不维护接口地址，详见 data/UrlImport.kt。
+ */
+@Composable
+private fun UrlImportCard(
+    job: com.webook.watch.data.UrlImport.Job?,
+    url: String,
+    onUrlChange: (String) -> Unit,
+    onStart: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Column(Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "链接导入",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                if (job?.error != null) {
+                    Text(
+                        "关闭",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable { onDismiss() }
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                    )
+                }
+                Button(
+                    onClick = { onStart(url) },
+                    enabled = url.isNotBlank() && job == null,
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp),
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    Text(
+                        if (job == null) "下载" else "下载中",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = url,
+                onValueChange = onUrlChange,
+                singleLine = true,
+                enabled = job == null,
+                placeholder = {
+                    Text("https:// 直链，如 xxx.epub", style = MaterialTheme.typography.labelSmall)
+                },
+                textStyle = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+            )
+
+            val err = job?.error
+            when {
+                err != null -> Text(
+                    "✗ $err",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+
+                job != null -> {
+                    // 服务器没给 Content-Length 时 total=0，这时 progress 拿不到，就显示已下载了多少
+                    val frac = job.fraction
+                    LinearProgressIndicator(
+                        progress = { if (frac >= 0f) frac else 0f },
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    )
+                    Text(
+                        if (frac >= 0f) {
+                            "${mb(job.read)} / ${mb(job.total)}"
+                        } else {
+                            "已下载 ${mb(job.read)}（服务器没给总大小）"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                }
+
+                else -> Text(
+                    "只支持不需要登录、点开就能存成文件的直链",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+private fun mb(b: Long): String = when {
+    b >= 1048576 -> String.format("%.1f MB", b / 1048576.0)
+    b >= 1024 -> String.format("%.1f KB", b / 1024.0)
+    else -> "$b B"
 }

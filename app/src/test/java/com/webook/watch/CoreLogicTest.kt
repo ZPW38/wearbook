@@ -2,10 +2,13 @@ package com.webook.watch
 
 import com.webook.watch.data.Chapter
 import com.webook.watch.data.ImageRef
+import com.webook.watch.data.BookScanner
+import com.webook.watch.data.UrlImport
 import com.webook.watch.data.chapterFitsBook
 import com.webook.watch.data.collectImages
 import com.webook.watch.data.imageParagraph
 import com.webook.watch.data.paraFitsChapter
+import java.io.File
 import com.webook.watch.data.parseImagePara
 import com.webook.watch.parser.BookParser
 import com.webook.watch.parser.MobiParser
@@ -366,5 +369,81 @@ class CoreLogicTest {
         assertTrue(!chapterFitsBook(cs, 2))
         assertTrue(!chapterFitsBook(cs, -1))
         assertTrue(!chapterFitsBook(emptyList(), 0))
+    }
+
+    /* ---------- 链接导入：只认直链，其余一律不放行（1.0.28） ---------- */
+
+    @Test
+    fun url_normalize_addsSchemeAndRejectsJunk() {
+        assertEquals("https://example.com/a.epub", UrlImport.normalize("example.com/a.epub"))
+        assertEquals("http://example.com/a.epub", UrlImport.normalize("HTTP://example.com/a.epub"))
+        assertEquals(null, UrlImport.normalize(""))
+        assertEquals("   ", UrlImport.normalize("   ").orEmpty().ifEmpty { "   " })
+        // 非 http(s) 协议一律拒绝 —— 这是"只做通用直链下载"这条边界的代码化
+        assertEquals(null, UrlImport.normalize("ftp://example.com/a.epub"))
+        assertEquals(null, UrlImport.normalize("file:///sdcard/a.epub"))
+        // 粘进来一段带空格的文字，不该白等一次超时
+        assertEquals(null, UrlImport.normalize("这本书 http://a.com/b.epub"))
+    }
+
+    @Test
+    fun url_guessName_fromPath() {
+        assertEquals("book.epub", UrlImport.guessName("https://x.com/files/book.epub"))
+        assertEquals("中文名.epub", UrlImport.guessName("https://x.com/files/%E4%B8%AD%E6%96%87%E5%90%8D.epub"))
+        assertEquals("", UrlImport.guessName("https://x.com/"))
+        // ?id=1 这种查询串不在文件名里：拿到的 "download" 没有扩展名，
+        // 下载时会用文件头嗅探补上（见 UrlImport.sniff）
+        assertEquals("download", UrlImport.guessName("https://x.com/download?id=1"))
+    }
+
+    @Test
+    fun sniff_identifiesBookFormats() {
+        assertEquals(".epub", UrlImport.sniff(byteArrayOf(0x50, 0x4B.toByte(), 0x03, 0x04)))
+        val mobi = ByteArray(80)
+        "BOOKMOBI".toByteArray(Charsets.US_ASCII).copyInto(mobi, 60)
+        assertEquals(".mobi", UrlImport.sniff(mobi))
+        assertEquals(".html", UrlImport.sniff("<!DOCTYPE html><html>".toByteArray()))
+        assertEquals("", UrlImport.sniff("第一章\n这里是正文".toByteArray()))
+    }
+
+    /* ---------- 目录扫描：只收成品的书，靠「路径|字节数」记账（1.0.28） ---------- */
+
+    @Test
+    fun scanner_collectsOnlyFinishedBooks() {
+        val d = File(System.getProperty("java.io.tmpdir"), "scanner_test_${System.nanoTime()}")
+        d.mkdirs()
+        try {
+            File(d, "a.epub").writeText("PK")
+            File(d, "b.txt").writeText("正文")
+            File(d, "c.part").writeText("半个文件")        // 下载没下完
+            File(d, "d.crdownload").writeText("浏览器临时")
+            File(d, "e.pdf").writeText("不支持的格式")
+            File(d, "empty.txt")                          // 0 字节
+            File(d, "sub").mkdirs()
+
+            val names = BookScanner.booksIn(d).map { it.name }
+            assertTrue("应只收到 a.epub 和 b.txt，实际 $names", names.containsAll(listOf("a.epub", "b.txt")))
+            assertTrue("半成品不该收：$names", names.none { it.endsWith(".part") || it.endsWith(".crdownload") })
+            assertTrue("pdf 不支持：$names", names.none { it.endsWith(".pdf") })
+            assertTrue("0 字节不该收：$names", !names.contains("empty.txt"))
+            assertTrue("子目录不该出现：$names", !names.contains("sub"))
+
+            // 记账键：同一个文件大小变了就是"换了内容"，该当成新书再收一次
+            val f = File(d, "b.txt")
+            val k1 = BookScanner.keyOf(f)
+            f.writeText("正文被换掉了")
+            assertTrue("大小变了记账键必须变", k1 != BookScanner.keyOf(f))
+        } finally {
+            d.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun scanner_isBookName() {
+        assertTrue(BookScanner.isBookName("x.epub"))
+        assertTrue(BookScanner.isBookName("X.MOBI"))
+        assertTrue(BookScanner.isBookName("y.html"))
+        assertTrue(!BookScanner.isBookName("z.pdf"))
+        assertTrue(!BookScanner.isBookName("noext"))
     }
 }

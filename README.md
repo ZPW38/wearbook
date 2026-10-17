@@ -1,6 +1,7 @@
 # 腕上书 · 安卓手表电子书阅读器
 
-> **抬起手腕就能接着读。** 一个为小屏幕重新设计的离线阅读器 —— 纯原生 Compose 绘制，不依赖 WebView，**不申请网络权限**。
+> **抬起手腕就能接着读。** 一个为小屏幕重新设计的阅读器 —— 纯原生 Compose 绘制，不依赖 WebView。
+> v1.1.0 起支持「链接导入」与「扫目录收书」，因此声明了网络权限；除此之外不联网、不需要账号，书和进度都在本机。
 
 手表上没有浏览器内核，网页版阅读器在手表上跑不起来。所以这个版本用 **Kotlin + Jetpack Compose（Material 3）原生重写**：排版和渲染全部交给系统绘制，几百 KB 的体积，装得上、跑得动。
 
@@ -13,7 +14,7 @@
 | 📖 **四种格式** | TXT、EPUB（含正文插图）、MOBI / AZW（按书自带目录切章）、HTML |
 | 🎯 **续读精确到字** | 进度记「第几段的第几个字」，改字号不跳页，App 被划掉也不丢 |
 | 🚫 **不用 WebView** | 很多手表没有浏览器内核 —— 本项目排版渲染全由系统完成，装得上就跑得动 |
-| 📵 **完全离线** | 不申请网络权限，不需要账号，书和进度都在本机 |
+| 📥 **导入五路通** | 文件浏览 / 分享 / 打开方式 / 填链接直下 / 扫目录自动收，都不需要账号 |
 | 🎨 **完整 Material 3** | 自定义 M3 色板、M3 组件、小屏字阶；深浅色切换带过渡动画 |
 | ⌚ **针对小屏重做** | 44dp 触控区、圆屏安全边距、禁用手表固件层的侧滑返回 |
 
@@ -21,12 +22,12 @@
 
 ## 下载安装
 
-**最新版本：`wearbook-watch-1.0.26.apk`**（约 1.1 MB）
+**最新版本：`wearbook-watch-1.1.0.apk`**（约 1.1 MB）
 
 前往 [Releases](../../releases) 页面下载，然后在手表或手机上安装（Android 7.0 及以上）：
 
 ```bash
-adb install -r wearbook-watch-1.0.26.apk
+adb install -r wearbook-watch-1.1.0.apk
 ```
 
 - 或者把 APK 拷进手表存储，用手表自带的文件管理器点击安装
@@ -47,11 +48,13 @@ adb install -r wearbook-watch-1.0.26.apk
 | **MOBI / AZW** | PalmDOC 解压，**按书自带的目录锚点切章**（目录名就是「第一章 科学边界」） |
 | **HTML** | 直接解析 |
 
-### 📥 导书：三条路都能走
+### 📥 导书：五条路都能走
 
 1. **应用内文件管理器** —— 从 `/sdcard` 起逐级浏览，点文件夹进入、点电子书即导入。不调用系统 SAF，**没有文件选择器的手表也能用**。非电子书文件会置灰并标注「非电子书格式」，不会白点
 2. **分享导入** —— 在微信 / MT 管理器里长按电子书 →「分享」→ 选腕上书。走 `contentResolver` 流，**零权限，永远可用**
 3. **打开方式** —— 在其他应用里选「打开方式」→ 腕上书，直接读入（已注册 epub / mobi / azw）
+4. **链接导入** —— 导入页填一个 http(s) 直链，书直接下载入库。**只做通用直链下载**：把链接的字节流原样存成文件，不解析任何站点、不注入 Cookie、不做签名或反爬。无痕窗口里不登录就能存成文件的链接才下得了 —— 这是有意划的界
+5. **扫目录收书** —— 书架标题栏的文件夹按钮，一键把 `Download` / `Downloads` / `Books` 里已经下载好的书收进来（只扫一层，跳过 `.part` 等没下完的半成品；靠「路径+字节数」记账，不会重复导入）
 
 ### 📖 阅读体验
 
@@ -136,7 +139,7 @@ BT="$ANDROID_HOME/build-tools/34.0.0"
 java -jar "$BT/lib/apksigner.jar" sign \
   --v1-signing-enabled=true --v2-signing-enabled=true --v3-signing-enabled=false \
   --ks "$KS" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android \
-  --out wearbook-watch-1.0.26.apk \
+  --out wearbook-watch-1.1.0.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 
@@ -165,7 +168,7 @@ java -jar "$BT/lib/apksigner.jar" sign \
 - **权限说明**（上架应用商店时需留意）
   - `MANAGE_EXTERNAL_STORAGE`（所有文件访问）：安卓 11+ 下 `File.listFiles()` 只返回媒体文件，为了能在应用内浏览并导入电子书才需要。Google Play 对此权限审核严格，若上架可改用 SAF 或「分享到应用」
   - `VIBRATE`（翻页震动）、`READ_EXTERNAL_STORAGE`（安卓 10 及以下）
-  - **无网络权限**，完全离线运行
+  - **不需要账号，不上传任何东西**：v1.1.0 起仅有「链接导入」用得到网络权限，且只连你填的那个地址
 - **签名**：随包发布的 APK 用默认 debug keystore 签名，仅供测试安装。正式发布请自建 keystore，并把 keystore 与密码**排除在仓库之外**（`.gitignore` 已屏蔽 `*.jks` / `*.keystore`）
 
 ---

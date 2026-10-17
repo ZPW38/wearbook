@@ -23,6 +23,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,6 +48,9 @@ fun LibraryScreen(
     onOpen: (BookMeta) -> Unit,
     onDelete: (BookMeta) -> Unit,
     onImport: () -> Unit,
+    /** 扫目录收书：把 Download / Books 里已经下载好的书直接收进书架 */
+    onScan: () -> Unit,
+    scanning: Boolean,
     onSettings: () -> Unit
 ) {
     Box(Modifier.fillMaxSize()) {
@@ -63,6 +67,23 @@ fun LibraryScreen(
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.weight(1f).padding(start = 8.dp)
                     )
+                    // 扫目录收书：别的应用（下载器 / MT / 微信）已经把书放好的话，
+                    // 点一下就把 Download、Books 里的新书收进来，不用一个个点导入
+                    IconButton(onClick = onScan, enabled = !scanning) {
+                        if (scanning) {
+                            CircularProgressIndicator(
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(18.dp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_folder),
+                                contentDescription = "扫描目录收书",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
                     IconButton(onClick = onSettings) {
                         Icon(
                             painter = painterResource(R.drawable.ic_settings),
@@ -75,7 +96,13 @@ fun LibraryScreen(
 
             if (books.isEmpty()) {
                 Column(
-                    Modifier.fillMaxSize().padding(16.dp),
+                    // ⚠️ 必须用 weight(1f)，不能 fillMaxSize()：
+                    // 标题栏已经占掉一截，fillMaxSize 会让这一栏再撑满整屏高度，
+                    // 父 Column 装不下就把底部裁掉 —— 空态那两行说明文字会被切掉半行（实测过）。
+                    // 底部再留 76dp 让开右下角那个悬浮「＋」。
+                    Modifier
+                        .weight(1f)
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 84.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {

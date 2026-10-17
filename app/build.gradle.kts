@@ -12,8 +12,12 @@ android {
         applicationId = "com.webook.watch"
         minSdk = 24          // 覆盖绝大多数安卓手表（普通手机也能装）
         targetSdk = 34
-        versionCode = 28
-        versionName = "1.0.27"
+        // 版本号规则见 VERSIONING.md：三段式语义化版本 major.minor.patch。
+        // versionName 是**唯一的版本号来源**，别处（README / CHANGELOG / User-Agent）都不许硬编码。
+        // versionCode 必须单调递增才能覆盖安装，这里按 1000×major + 10×minor + patch + 1000 推，
+        // 免得纯靠人手记（1.1.0 -> 2010）。
+        versionCode = 2010
+        versionName = "1.1.0"
         resourceConfigurations += listOf("zh", "en")
         // 手表几乎都是 ARM：出 32 位（armeabi-v7a）并兼容 64 位（arm64-v8a）。
         // x86_64 是为**官方安卓模拟器**留的：模拟器镜像是 x86_64，只有带上它才能在

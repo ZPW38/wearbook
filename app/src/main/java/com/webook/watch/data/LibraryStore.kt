@@ -23,6 +23,33 @@ class LibraryStore(private val ctx: Context) {
     private val progressFile get() = File(root, "progress.json")
     private val bookmarkFile get() = File(root, "bookmarks.json")
 
+    /** 从外部目录扫进来的书，用 "绝对路径|字节数" 记账，免得每次扫描都重复导入 */
+    private val scannedFile get() = File(root, "scanned.json")
+
+    /** 已扫进来的外部文件：key = "路径|字节数" -> 导入时间 */
+    fun scanned(): Map<String, Long> {
+        if (!scannedFile.exists()) return emptyMap()
+        return runCatching {
+            val o = JSONObject(scannedFile.readText())
+            o.keys().asSequence().associateWith { o.optLong(it, 0L) }
+        }.getOrDefault(emptyMap())
+    }
+
+    /**
+     * 记下这批扫进来的文件。
+     * 只保留最近 300 条：扫过的目录可能随时被清空，记太多没有意义，反而越写越大。
+     */
+    fun markScanned(keys: Collection<String>) {
+        if (keys.isEmpty()) return
+        val merged = scanned().toMutableMap()
+        val now = System.currentTimeMillis()
+        keys.forEach { merged[it] = now }
+        val o = JSONObject()
+        merged.entries.sortedByDescending { it.value }.take(300)
+            .forEach { (k, v) -> o.put(k, v) }
+        runCatching { scannedFile.writeText(o.toString()) }
+    }
+
     fun list(): List<BookMeta> {
         if (!indexFile.exists()) return emptyList()
         return try {

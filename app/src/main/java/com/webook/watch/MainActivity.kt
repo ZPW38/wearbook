@@ -50,10 +50,13 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.webook.watch.data.AppVersion
 import com.webook.watch.data.BookMeta
+import com.webook.watch.data.BookScanner
 import com.webook.watch.data.Chapter
 import com.webook.watch.data.LibraryStore
 import com.webook.watch.data.Settings
+import com.webook.watch.data.UrlImport
 import com.webook.watch.parser.BookParser
 import com.webook.watch.parser.ParsedBook
 import com.webook.watch.parser.SUPPORTED_EXT
@@ -112,6 +115,12 @@ class MainActivity : ComponentActivity() {
     private var askedAllFiles = false
     /** 正在导入的书名（非空时盖一层进度遮罩）——大 EPUB 要解析十几秒，没有提示用户会以为没反应然后反复点 */
     private var importing by mutableStateOf<String?>(null)
+
+    /** 链接导入的进度（null = 没在下）；带 error 就是下失败了，界面会显示原因 */
+    private var urlJob by mutableStateOf<UrlImport.Job?>(null)
+
+    /** 正在扫描目录收书 */
+    private var scanning by mutableStateOf(false)
     private var lastBackAt = 0L
 
     data class Confirm(val title: String, val body: String, val action: () -> Unit)
@@ -264,6 +273,8 @@ class MainActivity : ComponentActivity() {
                                 onDelete = { meta -> confirm = Confirm("删除《${meta.title}》？",
                                     "图书内容和阅读进度将一并删除，且无法恢复。") { store.remove(meta.id); vibrate(); refresh() } },
                                 onImport = { screen = "import"; ensureStoragePermission() },
+                                onScan = { scanAndCollect() },
+                                scanning = scanning,
                                 onSettings = { screen = "settings" }
                             )
 
@@ -320,6 +331,9 @@ class MainActivity : ComponentActivity() {
                                 hasPermission = storageGranted,
                                 needAllFiles = needAllFiles,
                                 storageBlocked = storageBlocked,
+                                urlJob = urlJob,
+                                onUrlImport = { startUrlImport(it) },
+                                onUrlDismiss = { urlJob = null },
                                 onOpen = { e ->
                                     if (e.file.isDirectory) { dirStack.add(e.file); refreshDir() }
                                     else if (e.isBook) importFile(e.file)
@@ -579,10 +593,13 @@ class MainActivity : ComponentActivity() {
         return parsed to false
     }
 
-    private suspend fun finishImport(parsed: ParsedBook, duplicated: Boolean) {
+    /** quiet = true 用于批量扫描：一口气收 10 本时不该弹 10 次 toast */
+    private suspend fun finishImport(parsed: ParsedBook, duplicated: Boolean, quiet: Boolean = false) {
         withContext(Dispatchers.Main) {
             refresh()
-            toast(if (duplicated) "《${parsed.title}》已经在书架里了" else "已导入《${parsed.title}》")
+            if (!quiet) {
+                toast(if (duplicated) "《${parsed.title}》已经在书架里了" else "已导入《${parsed.title}》")
+            }
             screen = "library"
         }
     }
@@ -617,6 +634,116 @@ class MainActivity : ComponentActivity() {
         is OutOfMemoryError -> "内存不足，这本书太大了"
         is StackOverflowError -> "文件结构太复杂，解析失败"
         else -> e.message ?: e.javaClass.simpleName
+    }
+
+    /* ---------------- 链接导入：填一个 http(s) 直链，把书下载下来 ---------------- */
+
+    private fun startUrlImport(raw: String) {
+        val url = UrlImport.normalize(raw)
+        if (url == null) {
+            toast("这个链接用不了 —— 只支持 http / https 开头的网址")
+            return
+        }
+        if (importing != null || urlJob != null) { toast("正在导入，请稍候…"); return }
+        val dir = File(cacheDir, "url_import").apply { mkdirs() }
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                var lastPush = 0L
+                val file = UrlImport.download(url, dir, AppVersion.userAgent(this@MainActivity)) { read, total ->
+                    // 进度节流到 256KB 一次：太密会把小屏界面拖得直掉帧
+                    if (read - lastPush >= 256 * 1024) {
+                        lastPush = read
+                        urlJob = UrlImport.Job(url, read, total)
+                    }
+                }
+                importFetched(file, fromScan = false)
+            } catch (e: Throwable) {
+                withContext(Dispatchers.Main) { urlJob = UrlImport.Job(url, error = friendlyError(e)) }
+            }
+        }
+    }
+
+    /**
+     * 一个"下载好的文件"入库。
+     * epub 的插图要在阅读时回原 zip 里按需读，所以必须搬进长期目录，cacheDir 会被系统清掉。
+     */
+    private suspend fun importFetched(downloaded: File, fromScan: Boolean) {
+        val name = downloaded.name
+        val isEpub = name.endsWith(".epub", true)
+        try {
+            var src = downloaded
+            if (isEpub) {
+                val keep = File(keepDir(), name)
+                val ok = runCatching {
+                    if (keep.exists()) keep.delete()
+                    downloaded.renameTo(keep)
+                }.getOrDefault(false)
+                if (ok) src = keep
+            }
+            if (!isEpub && src.length() > BookParser.MAX_IN_MEMORY_BYTES) {
+                if (src != downloaded) src.delete()
+                downloaded.delete()
+                withContext(Dispatchers.Main) {
+                    toast("这本书 ${src.length() / 1048576} MB，超过上限 ${BookParser.MAX_IN_MEMORY_BYTES / 1048576} MB —— 手表内存放不下")
+                }
+                return
+            }
+            // epub 不读成字节数组（ZipFile 逐章读），传 null 省掉一整份文件的内存
+            val bytes = if (isEpub) null else src.readBytes()
+            val (parsed, dup) = parseAndStore(name, bytes, if (isEpub) src else null)
+            if (fromScan && !dup) store.markScanned(listOf(BookScanner.keyOf(downloaded)))
+            finishImport(parsed, dup, quiet = fromScan)
+        } catch (e: Throwable) {
+            withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
+        } finally {
+            withContext(Dispatchers.Main) {
+                importing = null
+                urlJob = null
+            }
+        }
+    }
+
+    /* ---------------- 扫目录：把别处下载好的书收进书架 ---------------- */
+
+    /**
+     * 扫 Download / Downloads / Books 以及应用自己的 books 目录，把没见过的书收进来。
+     *
+     * 用 "路径|字节数" 记账，所以反复点不会重复导入；文件被换成新内容（大小变了）会被当成新书。
+     */
+    private fun scanAndCollect() {
+        if (scanning || importing != null) { toast("正在导入，请稍候…"); return }
+        scanning = true
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val known = store.scanned()
+                val dirs = BookScanner.defaultDirs(storageRoot()) + File(appBooksDir(), "books")
+                val fresh = ArrayList<File>()
+                dirs.filter { it.isDirectory }.forEach { d ->
+                    BookScanner.booksIn(d).forEach { f ->
+                        if (!known.containsKey(BookScanner.keyOf(f))) fresh.add(f)
+                    }
+                }
+                if (fresh.isEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        toast("扫过了，没有新书（Download / Books 目录里没有没导入过的电子书）")
+                    }
+                    return@launch
+                }
+                var okCount = 0
+                for (f in fresh) {
+                    importing = f.name.substringBeforeLast('.')
+                    val before = store.list().size
+                    // 复用同一条入库链路；每本都单独 try，一本坏的不该把后面的全带下去
+                    importFetched(f, fromScan = true)
+                    if (store.list().size > before) okCount++
+                }
+                withContext(Dispatchers.Main) {
+                    toast("扫描完成：新收进 ${okCount} 本（共发现 ${fresh.size} 本）")
+                }
+            } finally {
+                withContext(Dispatchers.Main) { scanning = false }
+            }
+        }
     }
 
     /** 处理别的 App「分享 / 打开方式」进来的 URI（不需要任何存储权限） */
