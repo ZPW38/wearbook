@@ -12,11 +12,14 @@ android {
         applicationId = "com.webook.watch"
         minSdk = 24          // 覆盖绝大多数安卓手表（普通手机也能装）
         targetSdk = 34
-        versionCode = 27
-        versionName = "1.0.26"
+        versionCode = 28
+        versionName = "1.0.27"
         resourceConfigurations += listOf("zh", "en")
-        // 手表几乎都是 ARM：只出 32 位（armeabi-v7a）并兼容 64 位（arm64-v8a）
-        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
+        // 手表几乎都是 ARM：出 32 位（armeabi-v7a）并兼容 64 位（arm64-v8a）。
+        // x86_64 是为**官方安卓模拟器**留的：模拟器镜像是 x86_64，只有带上它才能在
+        // 320×360 / Android 10 的手表规格虚拟设备上装包、跑自动化测试（截图为证）。
+        // 代价只有一个 9KB 的 libandroidx.graphics.path.so，ARM 设备完全不受影响。
+        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64") }
     }
 
     buildTypes {
