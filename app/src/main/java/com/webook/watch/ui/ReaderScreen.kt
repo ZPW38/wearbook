@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -280,21 +281,39 @@ fun ReaderScreen(
             }
         }
 
-        fun goNext() {
+        /**
+         * 手动翻页的「计数信号」：每手动翻一次就 +1，正在跑的自动翻页计时器随之重启。
+         * 自动翻页自己翻的页**不**加，否则会自己把自己的计时器打断。
+         */
+        var autoTick by remember { mutableIntStateOf(0) }
+
+        fun goNext(auto: Boolean = false) {
             if (pages.isEmpty()) return
+            if (!auto) autoTick++
             if (scrollMode) {                       // 滑动模式：往下滚一屏
-                scope.launch { scroller.animateScrollBy(hPx * 0.92f) }
-                onVibrate()
+                // 用固定 380ms 的线性动画（默认 spring 又慢又拖），滚完如果已经到底，
+                // 自动接上下一章 —— 否则自动翻页会在章末无声无息地"失灵"（1.0.24 的坑）
+                scope.launch {
+                    scroller.animateScrollBy(hPx * 0.92f, tween(SCROLL_TURN_MS, easing = LinearEasing))
+                    if (!scroller.canScrollForward && chapterIdx < chapters.size - 1) {
+                        chapterIdx++
+                        pageIdx = 0
+                    }
+                }
+                if (!auto) onVibrate()
                 return
             }
             scope.launch { slide.snapTo(wPx); slide.animateTo(0f, tween(220)) }
-            if (pageIdx < pages.size - 1) { pageIdx++; onVibrate() }
-            else if (chapterIdx < chapters.size - 1) { chapterIdx++; pageIdx = 0; onVibrate() }
+            if (pageIdx < pages.size - 1) { pageIdx++; if (!auto) onVibrate() }
+            else if (chapterIdx < chapters.size - 1) { chapterIdx++; pageIdx = 0; if (!auto) onVibrate() }
         }
         fun goPrev() {
             if (pages.isEmpty()) return
+            autoTick++
             if (scrollMode) {                       // 滑动模式：往上滚一屏
-                scope.launch { scroller.animateScrollBy(-hPx * 0.92f) }
+                scope.launch {
+                    scroller.animateScrollBy(-hPx * 0.92f, tween(SCROLL_TURN_MS, easing = LinearEasing))
+                }
                 onVibrate()
                 return
             }
@@ -369,16 +388,29 @@ fun ReaderScreen(
                 }
             }
             .pointerInput(Unit) {
+                // 命中测试：图片所在的**整行**（左右到版心边缘）再外扩 8dp 都算点中。
+                // 以前只认图片自己的那个矩形，点在图边上的留白就被当成"点了空白"，
+                // 接着走「点中间 = 开菜单」——用户看到的就是"我明明点的是图，怎么弹菜单"。
+                val tol = 8.dp.toPx()
+                fun hitImageAt(x: Float, y: Float): ImageRef? {
+                    val pg = pages.getOrNull(pageIdx) ?: return null
+                    return imageRectsInRange(
+                        lines, pg.start, pg.end, padY, padX, textW,
+                        lineHeightPx, 0f, paint
+                    ).firstOrNull { (_, r) ->
+                        x >= padX - tol && x <= padX + textW + tol &&
+                            y >= r.top - tol && y <= r.bottom + tol
+                    }?.first
+                }
                 detectTapGestures(
-                    onLongPress = { showOverlay = true },
+                    // 手表上"点一下"很容易被判成长按（按住超过 500ms）。以前长按一律开菜单，
+                    // 所以点插图经常变成弹菜单；现在长按图 = 看图，只有按空白才开菜单。
+                    onLongPress = { pos ->
+                        val hit = hitImageAt(pos.x, pos.y)
+                        if (hit != null) { zoomImage = hit; onVibrate() } else showOverlay = true
+                    },
                     onTap = { offset ->
-                        // 点在插图上 -> 放大查看（比翻页优先，否则点图会翻页）
-                        val hit = pages.getOrNull(pageIdx)?.let { pg ->
-                            imageRectsInRange(
-                                lines, pg.start, pg.end, padY, padX, textW,
-                                lineHeightPx, 0f, paint
-                            ).firstOrNull { it.second.contains(offset.x, offset.y) }?.first
-                        }
+                        val hit = hitImageAt(offset.x, offset.y)
                         if (hit != null) { zoomImage = hit; onVibrate(); return@detectTapGestures }
 
                         val w = size.width
@@ -481,11 +513,20 @@ fun ReaderScreen(
             }
         }
 
-        // 自动翻页
-        LaunchedEffect(settings.autoSeconds, chapterIdx, pageIdx, speaking) {
-            if (settings.autoSeconds > 0 && !speaking) {
-                delay(settings.autoSeconds * 1000L)
-                goNext()
+        /**
+         * 自动翻页：自己转圈，不靠翻页动作来"续命"。
+         *
+         * 旧写法把 chapterIdx / pageIdx 也当 key，靠"翻了一页"重启计时器 ——
+         * 但**滑动模式滚 0.92 屏不一定跨过页的边界**，pageIdx 没变就不会重启，自动翻页就停住了。
+         * 现在改成 while 循环：只有改间隔、开/关朗读、手动翻页（autoTick 自增）才会重新计时。
+         */
+        LaunchedEffect(settings.autoSeconds, speaking, autoTick) {
+            val sec = settings.autoSeconds
+            if (sec > 0 && !speaking) {
+                while (true) {
+                    delay(sec * 1000L)
+                    goNext(auto = true)
+                }
             }
         }
 
@@ -517,8 +558,17 @@ fun ReaderScreen(
                 onNextChapter = { if (chapterIdx < chapters.size - 1) { chapterIdx++; pageIdx = 0 } },
                 onSearch = { panel = Panel.SEARCH },
                 onAutoPage = {
-                    // 5 / 10 / 20 / 30 / 60 / 关闭 循环
-                    val next = when (settings.autoSeconds) { 0 -> 5; 5 -> 10; 10 -> 20; 20 -> 30; 30 -> 60; else -> 0 }
+                    // 3 / 5 / 10 / 20 / 30 / 关闭 循环；1、2 秒这种极限速度去设置里用滑杆调。
+                    // 以前最快只有 5 秒、最慢磨到 60 秒，观感是"自动翻页像没生效"。
+                    val next = when (settings.autoSeconds) {
+                        0 -> 3
+                        1, 2 -> 3
+                        3 -> 5
+                        5 -> 10
+                        10 -> 20
+                        20 -> 30
+                        else -> 0
+                    }
                     onMutate { autoSeconds = next }
                     tip = if (next == 0) "自动翻页已关闭" else "自动翻页：每 ${next} 秒翻一页"
                 },
@@ -723,6 +773,14 @@ private const val FIRST_TIP =
 private const val SCROLL_CHUNK = 24
 
 /**
+ * 滑动模式「翻一屏」的动画时长（毫秒）。
+ *
+ * 以前用的是 animateScrollBy 的默认 spring，惯性大、收尾拖沓，一屏能磨掉一秒多；
+ * 换成固定时长的线性 tween，翻页干脆、速度可控，自动翻页时才跟得上设定的秒数。
+ */
+private const val SCROLL_TURN_MS = 380
+
+/**
  * 滑动阅读（整章连续上下滚动）。
  * 用 LazyColumn 分块渲染，只绘制可见的几块 —— 长章节也不会一帧画几千行。
  * 块与块之间不留空行，所以看上去就是一篇连续的文章。
@@ -759,26 +817,36 @@ private fun ScrollBody(
 
     Box(
         Modifier.fillMaxSize().pointerInput(tapPaging) {
+            // 命中测试：图片所在整行（左右到版心边缘）+ 8dp 容差都算点中。
+            // 滚动模式下要先把屏幕坐标换算到「第几块的第几行」：用可见项的偏移，
+            // chunk 的起始行号就是它在全书里的行号。
+            val tol = 8.dp.toPx()
+            fun hitImageAt(x: Float, y: Float): ImageRef? {
+                val info = scroller.layoutInfo
+                for (item in info.visibleItemsInfo) {
+                    val chunk = chunks.getOrNull(item.index) ?: continue
+                    if (y < item.offset || y >= item.offset + item.size) continue
+                    val startG = item.index * SCROLL_CHUNK
+                    val r = imageRectsInRange(
+                        lines, startG, startG + chunk.size,
+                        item.offset.toFloat(), padX, textW,
+                        lineHeightPx, paraGapPx, paint
+                    ).firstOrNull { (_, rect) ->
+                        x >= padX - tol && x <= padX + textW + tol &&
+                            y >= rect.top - tol && y <= rect.bottom + tol
+                    }?.first
+                    if (r != null) return r
+                }
+                return null
+            }
             detectTapGestures(
-                onLongPress = { onTapCenter() },
+                // 长按图 = 看图；长按空白才是开关菜单（手表上点击容易被判成长按）
+                onLongPress = { pos ->
+                    val hit = hitImageAt(pos.x, pos.y)
+                    if (hit != null) onImageTap(hit) else onTapCenter()
+                },
                 onTap = { offset ->
-                    // 点在插图上 -> 放大查看。滚动模式下要先把屏幕坐标换算到「第几块的第几行」：
-                    // 用 LazyColumn 的可见项偏移，chunk 的起始行号就是它在全书里的行号。
-                    val hit = run {
-                        val info = scroller.layoutInfo
-                        for (item in info.visibleItemsInfo) {
-                            val chunk = chunks.getOrNull(item.index) ?: continue
-                            if (offset.y < item.offset || offset.y >= item.offset + item.size) continue
-                            val startG = item.index * SCROLL_CHUNK
-                            val r = imageRectsInRange(
-                                lines, startG, startG + chunk.size,
-                                item.offset.toFloat(), padX, textW,
-                                lineHeightPx, paraGapPx, paint
-                            ).firstOrNull { it.second.contains(offset.x, offset.y) }?.first
-                            if (r != null) return@run r
-                        }
-                        null
-                    }
+                    val hit = hitImageAt(offset.x, offset.y)
                     if (hit != null) { onImageTap(hit); return@detectTapGestures }
 
                     val w = size.width
@@ -1011,7 +1079,7 @@ private fun ReaderOverlay(
                     TextIconButton(
                         icon = R.drawable.ic_autoplay,
                         label = if (autoSeconds > 0) "自动${autoSeconds}s" else "自动翻页",
-                        tip = "自动翻页：点一下在 5/10/20/30/60 秒与关闭之间切换；滑动模式下是自动往下滚一屏",
+                        tip = "自动翻页：点一下在 3/5/10/20/30 秒与关闭之间切换（1~30 秒任意值在设置里调）；滑动模式下自动往下滚一屏，滚到章末会自己接下一章",
                         onClick = onAutoPage, onTip = onTip, tint = fgColor
                     )
                     TextIconButton(
@@ -1327,12 +1395,18 @@ private fun ImageZoomView(
             )
             Box(Modifier.fillMaxSize().pointerInput(ref.path) { detectTapGestures { onClose() } })
         } else {
-            // 第一次打开、图还没解码出来：给个转圈，别让用户对着黑屏猜
-            CircularProgressIndicator(
-                color = Color.White.copy(alpha = 0.7f),
-                strokeWidth = 2.dp,
-                modifier = Modifier.align(Alignment.Center).size(22.dp)
-            )
+            // 第一次打开、图还没解码出来：给个转圈，别让用户对着黑屏猜。
+            // 这里必须铺一层全屏点击吸收 —— 否则这一瞬间的点击会穿透到底下的阅读页，
+            // 把菜单打开（"点插图结果弹出菜单"的另一个来源）。
+            Box(
+                Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { } }
+            ) {
+                CircularProgressIndicator(
+                    color = Color.White.copy(alpha = 0.7f),
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.align(Alignment.Center).size(22.dp)
+                )
+            }
         }
 
         // 切图时新图还在解码：上一张继续显示，右下角补一个小转圈，表示"下一张马上到"

@@ -493,11 +493,28 @@ fun OtherPanel(
                 }
             }
         }
-        SliderRow(
-            "自动翻页", settings.autoSeconds.toFloat(), 0f, 60f, steps = 11,
-            fmt = { if (it < 1f) "关闭" else "${it.toInt()} 秒" },
-            onChange = { v -> onMutate { autoSeconds = v.toInt() } }
-        )
+        SwitchRow(
+            "自动翻页", settings.autoSeconds > 0,
+            "打开后按下面的间隔自动往下翻；滑动模式滚到章末会自动接下一章"
+        ) { on ->
+            // 关闭只是把秒数归零，autoRemember 留着上次的值，下次打开直接回到原速度
+            onMutate { autoSeconds = if (on) autoRemember else 0 }
+        }
+        if (settings.autoSeconds > 0) {
+            SliderRow(
+                "翻页间隔",
+                settings.autoSeconds.toFloat().coerceIn(1f, 30f),
+                1f, 30f,
+                // steps = 0 → 无级连续调节：以前只有 0/5/10/20/30/60 几个死档，
+                // 想要 8 秒、12 秒根本调不出来
+                steps = 0,
+                fmt = { "${Math.round(it)} 秒" },
+                onChange = { v ->
+                    val sec = Math.round(v).toInt().coerceIn(1, 30)
+                    onMutate { autoSeconds = sec; autoRemember = sec }
+                }
+            )
+        }
         SwitchRow("阅读时常亮（不熄屏）", settings.keepScreenOn, "屏幕超时") { onMutate { keepScreenOn = it }; onApplySystem() }
         SwitchRow("隐藏状态栏", settings.hideStatusbar, "全屏沉浸式阅读") { onMutate { hideStatusbar = it }; onApplySystem() }
         SwitchRow("音量键翻页", settings.volumeKeys, "音量上=上一章，音量下=下一章") { onMutate { volumeKeys = it } }

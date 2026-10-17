@@ -90,8 +90,23 @@ fun SettingsScreen(
             SliderRow("行距", lh, 1.3f, 2.2f, 0.1f, { v -> String.format("%.1f", v) }) {
                 lh = it; settings.lineSpacing = it; onChange()
             }
-            SliderRow("自动翻页", auto, 0f, 60f, 5f, { v -> if (v <= 0f) "关闭" else "${v.toInt()} 秒" }) {
-                auto = it; settings.autoSeconds = it.toInt(); onChange()
+            SwitchRow("自动翻页", auto > 0f) { on ->
+                // 开：回到上次的秒数；关：秒数归零，但 autoRemember 记着，下次开还在原处
+                auto = if (on) settings.autoRemember.toFloat() else 0f
+                settings.autoSeconds = auto.toInt(); onChange()
+            }
+            if (auto > 0f) {
+                SliderRow(
+                    "翻页间隔",
+                    auto.coerceIn(1f, 30f), 1f, 30f,
+                    step = 0f,          // 0 = 无级连续调节（以前是 5 秒一档，0/5/10/.../60）
+                    display = { v -> "${Math.round(v)} 秒" }
+                ) { v ->
+                    auto = Math.round(v).toFloat().coerceIn(1f, 30f)
+                    settings.autoSeconds = auto.toInt()
+                    settings.autoRemember = auto.toInt()
+                    onChange()
+                }
             }
             SliderRow("朗读速度", rate, 0.5f, 1.5f, 0.05f, { v -> String.format("%.2f 倍", v) }) {
                 rate = it; settings.speechRate = it; onChange()
@@ -193,7 +208,7 @@ private fun SliderRow(
                 onValueChange = { dragging = true; local = it },
                 onValueChangeFinished = { dragging = false; onValue(local) },
                 valueRange = min..max,
-                steps = ((max - min) / step).toInt().coerceAtLeast(1) - 1,
+                steps = if (step <= 0f) 0 else ((max - min) / step).toInt().coerceAtLeast(1) - 1,
                 modifier = Modifier.fillMaxWidth()
             )
         }

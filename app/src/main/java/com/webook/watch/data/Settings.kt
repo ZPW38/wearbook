@@ -52,6 +52,15 @@ class Settings(ctx: Context) {
         get() = sp.getInt("auto", 0)
         set(v) = sp.edit().putInt("auto", v).apply()
 
+    /**
+     * 上次用过的自动翻页间隔（1~30 秒）。
+     * 关掉自动翻页时 autoSeconds 归零，但这里留着 —— 下次打开直接回到原来的秒数，
+     * 不用每次都从 10 秒重新拖一遍滑杆。
+     */
+    var autoRemember: Int
+        get() = sp.getInt("auto_mem", 10).coerceIn(1, 30)
+        set(v) = sp.edit().putInt("auto_mem", v.coerceIn(1, 30)).apply()
+
     /** 朗读语速 */
     var speechRate: Float
         get() = sp.getFloat("rate", 0.95f)
