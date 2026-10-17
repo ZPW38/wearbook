@@ -21,12 +21,12 @@
 
 ## 下载安装
 
-**最新版本：`wearbook-watch-1.0.22.apk`**（约 1.1 MB）
+**最新版本：`wearbook-watch-1.0.24.apk`**（约 1.1 MB）
 
 前往 [Releases](../../releases) 页面下载，然后在手表或手机上安装（Android 7.0 及以上）：
 
 ```bash
-adb install -r wearbook-watch-1.0.22.apk
+adb install -r wearbook-watch-1.0.24.apk
 ```
 
 - 或者把 APK 拷进手表存储，用手表自带的文件管理器点击安装
@@ -43,7 +43,7 @@ adb install -r wearbook-watch-1.0.22.apk
 | 格式 | 说明 |
 |---|---|
 | **TXT** | UTF-8 / GBK 自动识别，长文自动切章 |
-| **EPUB** | 按 spine 取正文，**正文插图会显示**（点一下可放大看细节），封面缩略图 |
+| **EPUB** | 按 spine 取正文，**正文插图会显示**（点一下撑满屏看，还能左右切到这本书里的其他插图），封面缩略图 |
 | **MOBI / AZW** | PalmDOC 解压，**按书自带的目录锚点切章**（目录名就是「第一章 科学边界」） |
 | **HTML** | 直接解析 |
 
@@ -59,7 +59,7 @@ adb install -r wearbook-watch-1.0.22.apk
 - **续读精确到字**：进度记「第几段的第几个字」，不是页码 —— 改字号、改行距、开关状态栏都不会跳页；App 被划掉、锁屏、进程被回收也**不会丢进度**
 - **目录与书签**：按书自带目录切章，长篇小说直接跳章
 - **全文搜索**：本书内搜索，点结果直接跳到命中页
-- **插图放大**：正文插图点一下撑满屏幕，**单指拖动**看局部（手表双指缩放做不出来，所以不用捏合手势）
+- **插图放大 + 多图连看**：正文插图点一下撑满屏幕，**单指拖动**看局部（手表双指缩放做不出来，所以不用捏合手势）；顶部「‹ 3 / 12 ›」切到本书其他插图，左右滑动同样能换，切图时缩放倍数保留、平移自动归位
 - **底部状态栏**：百分比 + 当前时间，可分开开关
 
 ### 🎨 排版与外观
@@ -136,7 +136,7 @@ BT="$ANDROID_HOME/build-tools/34.0.0"
 java -jar "$BT/lib/apksigner.jar" sign \
   --v1-signing-enabled=true --v2-signing-enabled=true --v3-signing-enabled=false \
   --ks "$KS" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android \
-  --out wearbook-watch-1.0.22.apk \
+  --out wearbook-watch-1.0.24.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 
@@ -146,7 +146,6 @@ java -jar "$BT/lib/apksigner.jar" sign \
 
 - 带 DRM 的 EPUB、亚马逊 **KF8 / KFX** 不支持（会明确提示，不会静默失败）
 - **PDF** 不打算支持：小屏重排体验差
-- **插图放大只支持翻页模式**：滑动模式下点击插图暂不响应
 - 朗读依赖手表自带的 TTS 引擎，部分精简 ROM 未内置（此时点击朗读没有声音）
 - 文字两端对齐默认关闭，开启后段落末行不参与对齐
 

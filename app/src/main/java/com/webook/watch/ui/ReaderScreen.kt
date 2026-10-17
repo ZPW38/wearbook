@@ -37,6 +37,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -47,6 +48,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +63,7 @@ import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
@@ -77,6 +80,7 @@ import com.webook.watch.data.Chapter
 import com.webook.watch.data.ImageRef
 import com.webook.watch.data.SearchHit
 import com.webook.watch.data.Settings
+import com.webook.watch.data.collectImages
 import com.webook.watch.data.parseImagePara
 import com.webook.watch.text.Page
 import com.webook.watch.text.PageLine
@@ -84,6 +88,7 @@ import com.webook.watch.text.PagePacker
 import com.webook.watch.text.LineBreaker
 import com.webook.watch.text.readerPaint
 import com.webook.watch.tts.Speaker
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -145,6 +150,11 @@ fun ReaderScreen(
     var panel by remember { mutableStateOf(Panel.NONE) }
     /** 正在放大查看的插图（null = 没在放大）。手表屏小，正文里的图看不清细节，点开看大图 */
     var zoomImage by remember { mutableStateOf<ImageRef?>(null) }
+    /**
+     * 全书插图序列（按阅读顺序、已去重）。查看器打开后靠它做「上一张 / 下一张」。
+     * 只在换书（chapters 变化）时算一次：只是逐段看一眼前缀，几万段也不过几毫秒。
+     */
+    val galleryImages = remember(chapters) { collectImages(chapters) }
 
     // 订阅设置变化：设置一改，本页（含各个面板）就会重新读取最新的值
     settings.rev
@@ -625,8 +635,18 @@ fun ReaderScreen(
         }
 
         // 插图放大查看：盖在最上层（连菜单也盖住，专心看图）
+        // 传入全书插图序列 + 点开的这张在其中的位置，查看器内部就能左右切换。
+        // 极少数情况（图不在章节段落里，理论走不到）退化成「只有这一张」，界面自动隐藏切换控件。
         zoomImage?.let { ref ->
-            ImageZoomView(bookPath = bookPath, ref = ref, onClose = { zoomImage = null })
+            val list = if (galleryImages.isEmpty()) listOf(ref) else galleryImages
+            val start = list.indexOfFirst { it.path == ref.path }.coerceAtLeast(0)
+            ImageZoomView(
+                bookPath = bookPath,
+                images = list,
+                startIndex = start,
+                onClose = { zoomImage = null },
+                onVibrate = onVibrate
+            )
         }
     }
 }
@@ -1144,30 +1164,78 @@ private fun imageRectsInRange(
  * 点一下图就撑满屏幕看，**单指拖动**平移看局部，再点一下退出 —— 全程不需要双指缩放，
  * 因为手表上双指手势本来就很难做出来。
  *
+ * 1.0.24 起支持**多图连看**：传入整本书的插图序列 + 点开的那张的位置，
+ * 顶部给「‹ 3 / 12 ›」的切换条，左右滑动也能换图。
+ * 只有一张图时切换条整体不出现，界面与以前完全一致。
+ *
  * 这里会**按更高的分辨率重新解码一次**：正文里那张是按正文宽度降采样的，直接放大是糊的。
  */
 @Composable
 private fun ImageZoomView(
     bookPath: String?,
-    ref: ImageRef,
-    onClose: () -> Unit
+    images: List<ImageRef>,
+    startIndex: Int,
+    onClose: () -> Unit,
+    onVibrate: () -> Unit
 ) {
-    var bmp by remember(ref) { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var loaded by remember(ref) { mutableStateOf(false) }
-    var offset by remember(ref) { mutableStateOf(Offset.Zero) }
-    // 1f = 撑满屏幕宽度；>1 表示用户手动放大；封顶 3f 防止把手表 96MB 堆吃爆
-    var scale by remember(ref) { mutableStateOf(1f) }
-    var showHint by remember(ref) { mutableStateOf(true) }
+    val total = images.size
+    /** 当前看的是第几张（0 起） */
+    var index by remember { mutableIntStateOf(startIndex.coerceIn(0, (total - 1).coerceAtLeast(0))) }
+    val ref = images.getOrNull(index) ?: return
 
-    LaunchedEffect(ref, bookPath) {
-        bmp = withContext(Dispatchers.IO) {
+    /**
+     * 正在显示的那张位图。
+     * 切图是异步解码（要回 zip 里现读），为了不闪白屏，**先接着显示上一张**，新图就绪再换上去。
+     */
+    var shown by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var shownPath by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var failed by remember { mutableStateOf(false) }
+
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    // 1f = 撑满屏幕宽度；>1 表示用户手动放大；封顶 3f 防止把手表 96MB 堆吃爆
+    var scale by remember { mutableFloatStateOf(1f) }
+    // 提示只在本次查看里出现一次；以前是「按 ref 记」，切一张图就重弹一次，很吵
+    var showHint by remember { mutableStateOf(true) }
+
+    /** 新图淡入一下，切换才有「翻过去」的连贯感，而不是硬切 */
+    val reveal = remember { Animatable(1f) }
+    val swipePx = with(LocalDensity.current) { 36.dp.toPx() }
+
+    fun goTo(target: Int) {
+        if (target !in 0 until total || target == index) {
+            onVibrate()   // 已经是第一张 / 最后一张：震一下，让用户知道是到头了而不是没点到
+            return
+        }
+        index = target
+        onVibrate()
+    }
+
+    LaunchedEffect(ref.path, bookPath) {
+        loading = true
+        failed = false
+        val b = withContext(Dispatchers.IO) {
             // 1000px 足够手表屏放大看，又不至于把 96MB 的堆吃满
             EpubImages.load(bookPath, ref, 1000)
         }
-        loaded = true
+        if (b != null) {
+            shown = b
+            shownPath = ref.path
+        } else {
+            failed = true
+        }
+        loading = false
     }
-    LaunchedEffect(ref) {
-        delay(2600)
+    // 换图只复位平移，缩放倍数保留：连看几张图时「我要放大看细节」这个意图是连续的
+    LaunchedEffect(index) { offset = Offset.Zero }
+    LaunchedEffect(shownPath) {
+        if (shownPath != null) {
+            reveal.snapTo(0.55f)
+            reveal.animateTo(1f, tween(200))
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(3000)
         showHint = false
     }
 
@@ -1180,20 +1248,36 @@ private fun ImageZoomView(
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.95f))
     ) {
-        val img = bmp
+        // shown 可能还是上一张（新图正在解码），这样切换过程中画面不会空白；
+        // 这张图确实坏了（failed）就不再顶着上一张骗人，直接进下面的「插图不可用」
+        val img = if (failed) null else shown
         if (img != null) {
             Canvas(
                 Modifier
                     .fillMaxSize()
-                // 拖动平移。detectDragGestures 用 requireUnconsumed=false 起手，
-                // 所以和下面的点击检测可以共存，不会互相抢事件。
-                .pointerInput(ref) {
-                    detectDragGestures { change, drag ->
-                        change.consume()
-                        offset = Offset(offset.x + drag.x, offset.y + drag.y)
-                    }
+                    .graphicsLayer { alpha = reveal.value }
+                // 拖动：放大态是平移看图；未放大时攒横移量，松手超过阈值就切上一张 / 下一张。
+                // detectDragGestures 用 requireUnconsumed=false 起手，所以和下面的点击检测可以共存。
+                .pointerInput(ref.path) {
+                    var swipe = 0f
+                    detectDragGestures(
+                        onDragStart = { swipe = 0f },
+                        onDrag = { change, drag ->
+                            change.consume()
+                            if (scale > 1.001f) {
+                                offset = Offset(offset.x + drag.x, offset.y + drag.y)
+                            } else {
+                                swipe += drag.x
+                            }
+                        },
+                        onDragEnd = {
+                            if (scale <= 1.001f && abs(swipe) > swipePx) {
+                                if (swipe < 0f) goTo(index + 1) else goTo(index - 1)
+                            }
+                        }
+                    )
                 }
-                .pointerInput(ref) {
+                .pointerInput(ref.path) {
                     // 只有在未放大（scale==1）时点一下才关闭；放大后点一下留给看图，
                     // 避免看图时误触闪退出界面。放大态下只能靠「返回」按钮退出。
                     detectTapGestures { if (scale <= 1.001f) onClose() }
@@ -1206,8 +1290,14 @@ private fun ImageZoomView(
                 val k = (size.width / iw) * scale
                 val dw = iw * k
                 val dh = ih * k
-                val left = (size.width - dw) / 2f + offset.x
-                val top = if (dh > size.height) offset.y else (size.height - dh) / 2f + offset.y
+                // 平移量夹在「图刚好铺满屏幕」的范围内：小图拖不出屏幕，大图也拖不出空白边
+                val maxX = ((dw - size.width) / 2f).coerceAtLeast(0f)
+                val maxY = ((dh - size.height) / 2f).coerceAtLeast(0f)
+                val dx = offset.x.coerceIn(-maxX, maxX)
+                val dy = offset.y.coerceIn(-maxY, maxY)
+                // 统一「居中 + 平移」：图比屏幕高时上下各露出一部分，居中最自然
+                val left = (size.width - dw) / 2f + dx
+                val top = (size.height - dh) / 2f + dy
                 drawImage(
                     image = img.asImageBitmap(),
                     dstOffset = IntOffset(left.roundToInt(), top.roundToInt()),
@@ -1221,13 +1311,13 @@ private fun ImageZoomView(
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 Text(
-                    "单指拖动可查看细节",
+                    if (total > 1) "拖动看细节 · 左右滑动换图" else "单指拖动可查看细节",
                     color = Color.White.copy(alpha = 0.8f),
                     style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(bottom = 80.dp)
+                    modifier = Modifier.padding(bottom = 84.dp)
                 )
             }
-        } else if (loaded) {
+        } else if (failed) {
             Text(
                 "插图不可用\n原文件可能已被移动或删除",
                 color = Color.White.copy(alpha = 0.75f),
@@ -1235,7 +1325,71 @@ private fun ImageZoomView(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.align(Alignment.Center).padding(24.dp)
             )
-            Box(Modifier.fillMaxSize().pointerInput(ref) { detectTapGestures { onClose() } })
+            Box(Modifier.fillMaxSize().pointerInput(ref.path) { detectTapGestures { onClose() } })
+        } else {
+            // 第一次打开、图还没解码出来：给个转圈，别让用户对着黑屏猜
+            CircularProgressIndicator(
+                color = Color.White.copy(alpha = 0.7f),
+                strokeWidth = 2.dp,
+                modifier = Modifier.align(Alignment.Center).size(22.dp)
+            )
+        }
+
+        // 切图时新图还在解码：上一张继续显示，右下角补一个小转圈，表示"下一张马上到"
+        if (loading && shown != null && shownPath != ref.path) {
+            CircularProgressIndicator(
+                color = Color.White.copy(alpha = 0.75f),
+                strokeWidth = 2.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 18.dp, bottom = 92.dp)
+                    .size(18.dp)
+            )
+        }
+
+        /**
+         * 顶部居中的切换条：‹ 3 / 12 ›。
+         *
+         * 为什么放顶部而不是和底部工具条挤在一行：手表屏只有 320×360，底部已经有
+         * 返回 / 放大 / 缩小 三个「图标+文字」按钮了（1.0.23 的成果），再塞两个箭头加计数
+         * 会把一行撑爆、边角还被圆屏吃掉。上下分居，拇指下够缩放、上够翻页，都不打架。
+         *
+         * 只有一张图时整条不出现 —— 数量为 1 的书不该看到"1 / 1"这种没用的控件。
+         */
+        if (total > 1) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 18.dp)
+                    .height(44.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 2.dp)
+                ) {
+                    GalleryArrow(
+                        icon = R.drawable.ic_chevron_left,
+                        desc = "上一张",
+                        enabled = index > 0,
+                        onClick = { goTo(index - 1) }
+                    )
+                    Text(
+                        "${index + 1} / $total",
+                        color = Color.White.copy(alpha = 0.95f),
+                        style = MaterialTheme.typography.labelMedium,
+                        // 等宽数字，1→9 换到 10 时整条不会左右抖动
+                        modifier = Modifier.padding(horizontal = 2.dp)
+                    )
+                    GalleryArrow(
+                        icon = R.drawable.ic_chevron_right,
+                        desc = "下一张",
+                        enabled = index < total - 1,
+                        onClick = { goTo(index + 1) }
+                    )
+                }
+            }
         }
 
         /**
@@ -1291,6 +1445,38 @@ private fun ImageZoomView(
                     }
                 )
             }
+        }
+    }
+}
+
+/**
+ * 顶部切换条上的箭头按钮：Material Symbols 的 chevron（与全应用图标同一套）。
+ *
+ * 到头时**变淡并禁用点击**，而不是隐藏 —— 两个箭头的位置始终固定，
+ * 切到第一张 / 最后一张时整条不会突然缩短、左右乱跳。
+ * 44dp 是手表上拇指能稳稳按到的最小尺寸，图标 20dp 居中。
+ */
+@Composable
+private fun GalleryArrow(
+    @DrawableRes icon: Int,
+    desc: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        color = Color.Transparent,
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier.size(44.dp)
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Icon(
+                painter = painterResource(icon),
+                contentDescription = desc,
+                tint = Color.White.copy(alpha = if (enabled) 0.95f else 0.25f),
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
 }

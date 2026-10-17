@@ -1,6 +1,8 @@
 package com.webook.watch
 
+import com.webook.watch.data.Chapter
 import com.webook.watch.data.ImageRef
+import com.webook.watch.data.collectImages
 import com.webook.watch.data.imageParagraph
 import com.webook.watch.data.parseImagePara
 import com.webook.watch.parser.BookParser
@@ -296,5 +298,36 @@ class CoreLogicTest {
         assertEquals(-1, findLineFor(ls, 5, 0))
         assertEquals(-1, findLineFor(emptyList(), 0, 0))
         assertEquals(-1, findLineFor(ls, -1, 0))
+    }
+
+    /* ---------- 全书插图序列：查看器多图切换的数据源（1.0.24） ---------- */
+
+    @Test
+    fun collectImages_keepsReadingOrder() {
+        val chapters = listOf(
+            Chapter("一", listOf("正文", imageParagraph("a.jpg", 10, 10), "正文")),
+            Chapter("二", listOf(imageParagraph("b.jpg", 10, 10), imageParagraph("c.jpg", 10, 10)))
+        )
+        assertEquals(
+            listOf("a.jpg", "b.jpg", "c.jpg"),
+            collectImages(chapters).map { it.path }
+        )
+    }
+
+    @Test
+    fun collectImages_dedupesSameFile() {
+        // 同一张图被两章引用（封面 / 插图目录 / 复用）时，只在第一次出现的位置留一个，
+        // 否则用户在查看器里来回切会看到"同一张图连着两遍"
+        val chapters = listOf(
+            Chapter("一", listOf(imageParagraph("a.jpg", 1, 1), imageParagraph("b.jpg", 1, 1))),
+            Chapter("二", listOf(imageParagraph("a.jpg", 1, 1)))
+        )
+        assertEquals(listOf("a.jpg", "b.jpg"), collectImages(chapters).map { it.path })
+    }
+
+    @Test
+    fun collectImages_emptyForTextOnlyBook() {
+        assertTrue(collectImages(listOf(Chapter("一", listOf("只有文字")))).isEmpty())
+        assertTrue(collectImages(emptyList()).isEmpty())
     }
 }
