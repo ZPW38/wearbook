@@ -4,6 +4,8 @@ import com.webook.watch.R
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -64,7 +66,7 @@ fun ImportScreen(
     onOpenAppDir: () -> Unit
 ) {
     var urlText by remember { mutableStateOf("") }
-    val busy = urlJob != null
+    var urlExpanded by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -152,17 +154,26 @@ fun ImportScreen(
             }
         }
 
-        /* 链接导入：填一个能直接下载的 http(s) 直链，书就落到书架里 */
+        /* 链接导入：填一个能直接下载的 http(s) 直链，书就落到书架里。
+           卡片默认折叠 —— 320x360 的屏上，展开的输入框会把下面��本地文件列表)挤没，
+           而"从文件里选书"才是更常用、也更古老的那条路，不该被挤掉。 */
         UrlImportCard(
             job = urlJob,
             url = urlText,
+            expanded = urlExpanded,
+            onToggle = { urlExpanded = !urlExpanded },
             onUrlChange = { urlText = it },
             onStart = onUrlImport,
             onDismiss = onUrlDismiss
         )
 
         when {
-            !hasPermission -> Column(                Modifier.fillMaxSize().padding(16.dp),
+            // ⚠️ 这两处（无权限提示 / 空态提示）以前写的是 fillMaxSize()：
+            // 叠在标题栏下面就超出屏幕高度，被父 Column 裁掉 —— 结果是**本地文件列表整个看不见**，
+            // 连"打开专属文件夹"按钮也一起没了，看上去就像"本地导入功能被删了"。
+            // 正确写法是 weight(1f)：只占标题栏/路径/链接卡片之外剩下的那块。
+            !hasPermission -> Column(
+                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -175,7 +186,7 @@ fun ImportScreen(
             }
 
             entries.isNotEmpty() -> LazyColumn(
-                Modifier.fillMaxSize().padding(top = 6.dp),
+                Modifier.weight(1f).padding(top = 6.dp),
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
                 if (canGoUp) {
@@ -233,8 +244,10 @@ fun ImportScreen(
                 }
             }
 
+            // 可滚动：这段文案 + 两个按钮在 320x360 上比可用高度还高，
+            // 不给滚动的话下面的「打开专属文件夹」「返回上级目录」会被挤出去点不到
             else -> Column(
-                Modifier.fillMaxSize().padding(16.dp),
+                Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -254,7 +267,7 @@ fun ImportScreen(
                 )
                 // 万一系统就是不给读（部分手表 ROM 锁得死），还有一条不需要权限的路
                 Text(
-                    "兜底办法：在「MT 管理器」等文件管理器里长按图书 → 分享 / 打开方式 → 选「腕上书」，不用任何权限就能导入",
+                    "兜底：在「MT 管理器」里长按图书 → 分享 → 选「腕上书」\n不用任何权限",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                     modifier = Modifier.padding(top = 10.dp, start = 6.dp, end = 6.dp)
@@ -285,6 +298,8 @@ fun ImportScreen(
 private fun UrlImportCard(
     job: com.webook.watch.data.UrlImport.Job?,
     url: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
     onUrlChange: (String) -> Unit,
     onStart: (String) -> Unit,
     onDismiss: () -> Unit
@@ -295,13 +310,28 @@ private fun UrlImportCard(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
         Column(Modifier.padding(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onToggle() }
+            ) {
                 Text(
-                    "链接导入",
+                    "链接导入（http/https 直链）",
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
+                Text(
+                    if (expanded) "−" else "＋",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+            }
+            // 折叠态下只留标题这一行（约 28dp），把整块屏幕让给下面的文件列表
+            if (!expanded && job == null) return@Column
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 if (job?.error != null) {
                     Text(
                         "关闭",
