@@ -1,5 +1,8 @@
 package com.webook.watch.ui
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.foundation.clickable
 import com.webook.watch.R
 
 import androidx.compose.foundation.layout.Arrangement
@@ -258,6 +261,15 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 2.dp)
                     )
+                    // B 站主页：点一下交给系统浏览器打开
+                    Text(
+                        "B 站：space.bilibili.com/3493142762359756",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .clickable { openBilibili(ctx) }
+                    )
                     Text(
                         "GPL-3.0 许可证 · 离线运行 · 不收集任何数据",
                         style = MaterialTheme.typography.labelSmall,
@@ -323,6 +335,25 @@ private fun SwitchRow(label: String, checked: Boolean, onToggle: (Boolean) -> Un
         Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
             Switch(checked = checked, onCheckedChange = onToggle, colors = SwitchDefaults.colors())
+        }
+    }
+}
+
+/**
+ * 打开作者的 B 站主页。
+ *
+ * 单独抽出来是有原因的：手表 ROM（尤其是华为系）可能没装任何能处理 http 的浏览器，
+ * 或者被拦下；这种情况下 startActivity 会抛异常 —— 直接崩掉一个"点链接"的动作不值得，
+ * 捕获住，弹一句"没有可用浏览器"。
+ */
+private fun openBilibili(ctx: android.content.Context) {
+    val url = "https://space.bilibili.com/3493142762359756"
+    val ok = runCatching {
+        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    }.isSuccess
+    if (!ok) {
+        runCatching {
+            android.widget.Toast.makeText(ctx, "没有可用的浏览器，请手动打开 $url", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 }
