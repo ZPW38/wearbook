@@ -20,6 +20,20 @@ object BookScanner {
     fun isBookName(name: String): Boolean =
         name.substringAfterLast('.', "").lowercase() in SUPPORTED_EXT
 
+    /**
+     * 合并"默认目录"和"用户自定义目录"。
+     * 自定义项优先（去重），用户填的路径原样用，不做任何猜测或拼接。
+     */
+    fun resolveDirs(storageRoot: File, custom: String): List<File> {
+        val list = LinkedHashSet<File>()
+        defaultDirs(storageRoot).forEach { list.add(it) }
+        custom.split(';', '\n', ',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .forEach { list.add(File(it)) }
+        return list.toList()
+    }
+
     /** 常见的"别人把书放在这儿"的位置，挨个试，哪个有书扫哪个 */
     fun defaultDirs(storageRoot: File): List<File> = listOf(
         File(storageRoot, "Download"),

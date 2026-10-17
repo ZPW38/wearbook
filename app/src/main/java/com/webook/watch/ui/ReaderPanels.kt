@@ -524,12 +524,7 @@ fun OtherPanel(
             SwitchRow("  · 显示百分比", settings.statusPercent, "读到全书的百分之多少") { onMutate { statusPercent = it } }
             SwitchRow("  · 显示时间", settings.statusTime, "显示当前时间，看书时不用退出去看表") { onMutate { statusTime = it } }
         }
-        SwitchRow("翻页震动", settings.vibrate, "翻页时震一下；系统震动需为开启状态") { onMutate { vibrate = it } }
         SwitchRow("圆屏安全边距", settings.roundScreen, "圆屏手表请打开") { onMutate { roundScreen = it }; onApplySystem() }
-        SwitchRow(
-            "显示亮度调节控件", settings.showBrightness,
-            "收起面板后点屏幕中间，阅读菜单左侧就是亮度条"
-        ) { onMutate { showBrightness = it } }
     }
 }
 
@@ -601,65 +596,6 @@ fun SpeakPanel(
     }
 }
 
-/**
- * 左侧亮度条：竖排布局（文字 → 跟随系统开关 → 竖向滑杆 → 百分比），
- * 原来文字和开关挤在一行会互相压住。
- */
-@Composable
-fun BrightnessBar(
-    brightness: Float,
-    followSystem: Boolean,
-    onChange: (Float, Boolean) -> Unit,   // 值, 是否跟随系统
-    modifier: Modifier = Modifier,
-    bgColor: Color = MaterialTheme.colorScheme.surfaceContainer,
-    fgColor: Color = MaterialTheme.colorScheme.onSurface
-) {
-    Column(
-        modifier = modifier
-            .width(72.dp)
-            .background(bgColor, RoundedCornerShape(16.dp))
-            .padding(horizontal = 6.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            "跟随系统", style = MaterialTheme.typography.labelSmall,
-            color = fgColor.copy(alpha = 0.8f),
-            maxLines = 1
-        )
-        Switch(
-            checked = followSystem,
-            onCheckedChange = { onChange(brightness, it) },
-            colors = androidx.compose.material3.SwitchDefaults.colors(
-                checkedThumbColor = bgColor,
-                checkedTrackColor = fgColor.copy(alpha = 0.85f),
-                uncheckedThumbColor = fgColor.copy(alpha = 0.7f),
-                uncheckedTrackColor = fgColor.copy(alpha = 0.2f),
-                uncheckedBorderColor = fgColor.copy(alpha = 0.5f)
-            ),
-            modifier = Modifier.padding(top = 2.dp).scale(0.72f)
-        )
-        if (!followSystem) {
-            VerticalSlider(
-                value = brightness.coerceIn(0.05f, 1f),
-                onValueChange = { onChange(it, false) },
-                trackColor = fgColor.copy(alpha = 0.25f),
-                activeColor = fgColor,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-            Text(
-                "${(brightness.coerceIn(0f, 1f) * 100).toInt()}%",
-                style = MaterialTheme.typography.labelSmall,
-                color = fgColor.copy(alpha = 0.8f)
-            )
-        } else {
-            Text(
-                "系统", style = MaterialTheme.typography.labelSmall,
-                color = fgColor.copy(alpha = 0.8f),
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-    }
-}
 
 /** 竖向滑杆（Slider 只有横向版本，这里自绘一个） */
 @Composable

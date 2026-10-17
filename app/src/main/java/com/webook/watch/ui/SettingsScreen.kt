@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
@@ -15,7 +16,12 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import com.webook.watch.data.AppVersion
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.LaunchedEffect
@@ -166,6 +172,98 @@ fun SettingsScreen(
                         onClick = onOpenSystemSettings,
                         modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
                     ) { Text("打开系统设置") }
+                }
+            }
+
+            /* 扫目录收书：自定义要扫哪些目录 */
+            var scanText by remember { mutableStateOf(settings.scanDirs) }
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        "扫目录收书 · 自定义目录",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "书架上的文件夹按钮会扫这些目录，把没导入过的电子书收进来。多个目录用分号隔开；" +
+                            "留空则只扫 Download / Downloads / Books。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                    OutlinedTextField(
+                        value = scanText,
+                        onValueChange = { scanText = it },
+                        maxLines = 3,
+                        placeholder = {
+                            Text("/sdcard/Books;/storage/emulated/0/我的书", style = MaterialTheme.typography.labelSmall)
+                        },
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                    )
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 6.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (scanText.trim() != settings.scanDirs) {
+                            TextButton(onClick = { scanText = ""; settings.scanDirs = ""; onChange() }) {
+                                Text("恢复默认", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                        Button(
+                            onClick = {
+                                settings.scanDirs = scanText.trim()
+                                onChange()
+                            },
+                            enabled = scanText.trim() != settings.scanDirs,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp)
+                        ) { Text("保存", style = MaterialTheme.typography.labelMedium) }
+                    }
+                }
+            }
+
+            /* 关于：作者与版本（版本号运行时读，改了 build.gradle 不用动这里） */
+            val ctx = LocalContext.current
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        "腕上书 WearBook",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "版本 ${AppVersion.display(ctx)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                    Text(
+                        "作者：ZPW38",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    Text(
+                        "源码：github.com/ZPW38/wearbook",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                    Text(
+                        "GPL-3.0 许可证 · 离线运行 · 不收集任何数据",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
                 }
             }
 

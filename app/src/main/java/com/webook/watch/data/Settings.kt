@@ -71,6 +71,15 @@ class Settings(ctx: Context) {
         get() = sp.getBoolean("round", true)
         set(v) = sp.edit().putBoolean("round", v).apply()
 
+    /**
+     * 「扫目录收书」要扫哪些目录，分号分隔的**绝对路径**。
+     * 留空则用默认的 Download / Downloads / Books（见 BookScanner.defaultDirs）。
+     * 用分号而不是逗号：路径里本身就可能带逗号（用户自己命名的文件夹）。
+     */
+    var scanDirs: String
+        get() = sp.getString("scanDirs", "") ?: ""
+        set(v) { sp.edit().putString("scanDirs", v).apply() }
+
     /** 翻页震动 */
     var vibrate: Boolean
         get() = sp.getBoolean("vib", true)

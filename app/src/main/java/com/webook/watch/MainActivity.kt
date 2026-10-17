@@ -63,6 +63,7 @@ import com.webook.watch.parser.SUPPORTED_EXT
 import com.webook.watch.tts.Speaker
 import com.webook.watch.ui.FmEntry
 import com.webook.watch.ui.ImportScreen
+import com.webook.watch.ui.ConfirmBox
 import com.webook.watch.ui.LibraryScreen
 import com.webook.watch.ui.ReaderScreen
 import com.webook.watch.ui.SettingsScreen
@@ -368,19 +369,14 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // 统一的 Material 3 对话框（跟随主题、带动画）
+                    // 自己画的紧凑确认框：M3 的 AlertDialog 在 320×360 上会把按钮挤出屏幕，
+                    // 长按删除后"确定/取消"都点不到，只能按返回逃出来
                     confirm?.let { c ->
-                        AlertDialog(
-                            onDismissRequest = { confirm = null },
-                            title = { Text(c.title) },
-                            text = { Text(c.body) },
-                            confirmButton = {
-                                TextButton(onClick = { c.action(); confirm = null }) {
-                                    Text("确定", color = MaterialTheme.colorScheme.error)
-                                }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { confirm = null }) { Text("取消") }
-                            }
+                        ConfirmBox(
+                            title = c.title,
+                            body = c.body,
+                            onConfirm = { c.action(); confirm = null },
+                            onDismiss = { confirm = null }
                         )
                     }
 
@@ -716,7 +712,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val known = store.scanned()
-                val dirs = BookScanner.defaultDirs(storageRoot()) + File(appBooksDir(), "books")
+                // 默认目录 + 用户在设置里自定义的目录（设置项为空时就是纯默认）
+                val dirs = BookScanner.resolveDirs(storageRoot(), settings.scanDirs) + File(appBooksDir(), "books")
                 val fresh = ArrayList<File>()
                 dirs.filter { it.isDirectory }.forEach { d ->
                     BookScanner.booksIn(d).forEach { f ->

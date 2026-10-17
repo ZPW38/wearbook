@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -599,7 +600,7 @@ fun ReaderScreen(
                 speaking = speaking,
                 autoSeconds = settings.autoSeconds,
                 brightness = settings.brightness,
-                showBrightness = settings.showBrightness,
+                round = settings.roundScreen,
                 onBack = onBack,
                 onOpenToc = { panel = Panel.TOC },
                 onPrevChapter = { gotoChapter(chapterIdx - 1) },
@@ -993,7 +994,8 @@ private fun ReaderOverlay(
     speaking: Boolean,
     autoSeconds: Int,
     brightness: Float,
-    showBrightness: Boolean,
+    /** 圆屏手表：标题居中、图标让位给文字 */
+    round: Boolean,
     onBack: () -> Unit,
     onOpenToc: () -> Unit,
     onPrevChapter: () -> Unit,
@@ -1035,7 +1037,8 @@ private fun ReaderOverlay(
                 IconButton(onClick = onBack) {
                     Icon(
                         painter = painterResource(R.drawable.ic_arrow_back),
-                        contentDescription = "返回", tint = fgColor
+                        contentDescription = "返回",
+                        tint = if (round) fgColor.copy(alpha = 0.72f) else fgColor
                     )
                 }
                 Column(
@@ -1044,38 +1047,30 @@ private fun ReaderOverlay(
                         onLongClick = { onTip("章节名：点一下打开目录（可跳章、看书签）") }
                     )
                 ) {
+                    // 圆屏：顶部两侧是弧形，标题靠左会显得歪；居中后正好落在圆弧之间的视觉中轴上
                     Text(
                         chapterTitle.ifBlank { "第 ${chapterIdx + 1} 章" },
                         style = MaterialTheme.typography.titleSmall,
                         color = fgColor,
+                        textAlign = if (round) TextAlign.Center else TextAlign.Start,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         title, style = MaterialTheme.typography.labelSmall,
                         color = dimColor,
+                        textAlign = if (round) TextAlign.Center else TextAlign.Start,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
                 IconButton(onClick = onOpenToc) {
-                    Icon(painter = painterResource(R.drawable.ic_menu_book), contentDescription = "目录", tint = fgColor)
-                }
-            }
-
-        }
-
-        // 中间左侧：亮度调节（小浮条，不遮正文中间）
-        if (showBrightness) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
-                Box(Modifier.padding(start = 6.dp, bottom = 36.dp)) {
-                    BrightnessBar(
-                        brightness = brightness,
-                        followSystem = brightness < 0f,
-                        onChange = onBrightnessChange,
-                        bgColor = barColor,
-                        fgColor = fgColor
+                    Icon(
+                        painter = painterResource(R.drawable.ic_menu_book),
+                        contentDescription = "目录",
+                        tint = if (round) fgColor.copy(alpha = 0.72f) else fgColor
                     )
                 }
             }
+
         }
 
         // 底部工具栏
@@ -1174,7 +1169,7 @@ private fun ReaderOverlay(
 /** 图标 + 文字的菜单按钮；长按显示功能说明 */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun TextIconButton(
+private fun RowScope.TextIconButton(
     icon: Int,
     label: String,
     tip: String,
@@ -1184,8 +1179,13 @@ private fun TextIconButton(
     tint: Color = androidx.compose.ui.graphics.Color.Unspecified
 ) {
     Column(
+        // ⚠️ 宽度用 weight 平分，**不要写死 56.dp**：
+        // 320px 的屏在 density 240 下只有 213dp 宽，扣掉圆屏安全边距和行内边距只剩约 180dp，
+        // 而 4 × 56 = 224dp —— 固定宽度必然溢出，最后一列会被挤出屏幕、第二行整行看不见
+        // （模拟器实测就是这样）。平分之后任何宽度都放得下，213/4 ≈ 53dp 仍够 44dp 触控区。
         Modifier
-            .size(width = 56.dp, height = 48.dp)
+            .weight(1f)
+            .height(48.dp)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = { if (onLongClick != null) onLongClick() else onTip(tip) }
