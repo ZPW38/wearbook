@@ -220,8 +220,10 @@ fun ReaderScreen(
     BoxWithConstraints(Modifier.fillMaxSize().background(Color(bg.bg))) {
         val wPx = with(density) { maxWidth.toPx() }
         val hPx = with(density) { maxHeight.toPx() }
-        val padX = with(density) { 14.dp.toPx() }
-        val padY = with(density) { 12.dp.toPx() }
+        // 圆屏时正文边距收一点：外层已经按短边留了安全区（上下约 7%、左右约 2.8%），
+        // 这里再叠 14dp 会让本来就窄的版面更挤。方屏维持原来的 14/12。
+        val padX = with(density) { (if (settings.roundScreen) 9.dp else 14.dp).toPx() }
+        val padY = with(density) { (if (settings.roundScreen) 8.dp else 12.dp).toPx() }
         val textW = wPx - padX * 2
         // 底部状态栏（百分比 / 时间）占掉一行，正文相应让出空间，免得盖住字
         val showBar = settings.showStatusBar && (settings.statusPercent || settings.statusTime)
@@ -366,6 +368,7 @@ fun ReaderScreen(
             if (pageIdx > 0) { pageIdx-- }
             else if (chapterIdx > 0) gotoChapter(chapterIdx - 1)
         }
+
 
         // 音量键翻页：把翻页函数注册给 Activity
         DisposableEffect(Unit) {

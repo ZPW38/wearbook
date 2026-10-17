@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableIntStateOf
@@ -73,6 +74,7 @@ import com.webook.watch.parser.SUPPORTED_EXT
 import com.webook.watch.tts.Speaker
 import com.webook.watch.ui.FmEntry
 import com.webook.watch.ui.ImportScreen
+import com.webook.watch.ui.CircleSafeArea
 import com.webook.watch.ui.ConfirmBox
 import com.webook.watch.ui.DirPickerScreen
 import com.webook.watch.ui.LibraryScreen
@@ -275,6 +277,11 @@ class MainActivity : ComponentActivity() {
                     if (w != null && h != null && h > 0f) w / h else null
                 } else null
             }
+            // 圆屏安全区：按屏幕短边等比推算（上下留得多、左右留得少），不再用固定 10dp ——
+            // 10dp 在顶部/底部其实挡不住弧线，标题和底部栏会被咬掉一块。
+            val cfg = LocalConfiguration.current
+            val shortSideDp = minOf(cfg.screenWidthDp, cfg.screenHeightDp).toFloat()
+            val circleInset = CircleSafeArea.ofDp(shortSideDp)
             WearBookTheme(darkTheme = dark) {
                 // 模拟屏幕规格时，外面这层负责补黑边并居中；平时它完全透明、不参与视觉
                 Box(
@@ -296,7 +303,14 @@ class MainActivity : ComponentActivity() {
                 Box(
                     Modifier
                         .fillMaxSize()
-                        .then(if (settings.roundScreen) Modifier.padding(10.dp) else Modifier)
+                        .then(
+                            if (settings.roundScreen) Modifier.padding(
+                                start = circleInset.start,
+                                end = circleInset.end,
+                                top = circleInset.top,
+                                bottom = circleInset.bottom
+                            ) else Modifier
+                        )
                 ) {
                     AnimatedContent(
                         targetState = screen,
@@ -563,6 +577,27 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) applyEdgeGestureExclusion()
+    }
+
+    /**
+     * 表冠旋转 / 鼠标滚轮翻页。
+     *
+     * 走 Activity 的 onGenericMotionEvent 而不是 Compose 的 onRotaryScrollEvent：
+     * 表冠在系统层就是一个带 ACTION_SCROLL + AXIS_SCROLL 的 MotionEvent，
+     * 这样收既不用焦点、不依赖 Compose 版本，还能顺带把"鼠标滚轮"也管上。
+     *
+     * 复用音量键那条 readerTurn 回调 —— 同一套"上一页 / 下一页"，行为完全一致。
+     * 阈值 0.5 是防抖：表冠回弹时会吐一个极小的反向值，不设阈值就会翻过去又弹回来。
+     */
+    override fun onGenericMotionEvent(event: android.view.MotionEvent): Boolean {
+        if (event.action == android.view.MotionEvent.ACTION_SCROLL &&
+            screen == "reader" && readerTurn != null
+        ) {
+            val delta = event.getAxisValue(android.view.MotionEvent.AXIS_SCROLL)
+            if (delta > 0.5f) { readerTurn?.invoke(true); return true }
+            if (delta < -0.5f) { readerTurn?.invoke(false); return true }
+        }
+        return super.onGenericMotionEvent(event)
     }
 
     /** 音量键翻页（在阅读页且开关打开时生效） */
