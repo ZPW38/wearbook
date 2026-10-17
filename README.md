@@ -21,12 +21,12 @@
 
 ## 下载安装
 
-**最新版本：`wearbook-watch-1.0.25.apk`**（约 1.1 MB）
+**最新版本：`wearbook-watch-1.0.26.apk`**（约 1.1 MB）
 
 前往 [Releases](../../releases) 页面下载，然后在手表或手机上安装（Android 7.0 及以上）：
 
 ```bash
-adb install -r wearbook-watch-1.0.25.apk
+adb install -r wearbook-watch-1.0.26.apk
 ```
 
 - 或者把 APK 拷进手表存储，用手表自带的文件管理器点击安装
@@ -136,7 +136,7 @@ BT="$ANDROID_HOME/build-tools/34.0.0"
 java -jar "$BT/lib/apksigner.jar" sign \
   --v1-signing-enabled=true --v2-signing-enabled=true --v3-signing-enabled=false \
   --ks "$KS" --ks-key-alias androiddebugkey --ks-pass pass:android --key-pass pass:android \
-  --out wearbook-watch-1.0.25.apk \
+  --out wearbook-watch-1.0.26.apk \
   app/build/outputs/apk/release/app-release-unsigned.apk
 ```
 

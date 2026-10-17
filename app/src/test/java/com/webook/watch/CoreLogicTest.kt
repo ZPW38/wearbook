@@ -2,8 +2,10 @@ package com.webook.watch
 
 import com.webook.watch.data.Chapter
 import com.webook.watch.data.ImageRef
+import com.webook.watch.data.chapterFitsBook
 import com.webook.watch.data.collectImages
 import com.webook.watch.data.imageParagraph
+import com.webook.watch.data.paraFitsChapter
 import com.webook.watch.data.parseImagePara
 import com.webook.watch.parser.BookParser
 import com.webook.watch.parser.MobiParser
@@ -329,5 +331,40 @@ class CoreLogicTest {
     fun collectImages_emptyForTextOnlyBook() {
         assertTrue(collectImages(listOf(Chapter("一", listOf("只有文字")))).isEmpty())
         assertTrue(collectImages(emptyList()).isEmpty())
+    }
+
+    /* ---------- 存档自检：段落号得属于它记录的那一章（1.0.26） ---------- */
+
+    private fun sampleChapters() = listOf(
+        Chapter("一", List(10) { "甲$it" }),
+        Chapter("二", List(3) { "乙$it" })
+    )
+
+    @Test
+    fun paraFits_acceptsValidRange() {
+        val cs = sampleChapters()
+        assertTrue(paraFitsChapter(cs, 0, 0))
+        assertTrue(paraFitsChapter(cs, 0, 9))     // 刚好卡在边界上
+        assertTrue(paraFitsChapter(cs, 1, 2))
+    }
+
+    @Test
+    fun paraFits_rejectsStaleParaFromAnotherChapter() {
+        val cs = sampleChapters()
+        // 第二章只有 3 段：7 是第一章的段落号 —— 正是「新章号 + 旧章段落号」那种脏档案
+        assertTrue(!paraFitsChapter(cs, 1, 7))
+        assertTrue(!paraFitsChapter(cs, 1, -1))     // 老版本记录：没有精确位置
+        assertTrue(!paraFitsChapter(cs, 9, 0))      // 章号越界（书被重导过？）
+        assertTrue(!paraFitsChapter(emptyList(), 0, 0))
+    }
+
+    @Test
+    fun chapterFits_rejectsOutOfRange() {
+        val cs = sampleChapters()
+        assertTrue(chapterFitsBook(cs, 0))
+        assertTrue(chapterFitsBook(cs, 1))
+        assertTrue(!chapterFitsBook(cs, 2))
+        assertTrue(!chapterFitsBook(cs, -1))
+        assertTrue(!chapterFitsBook(emptyList(), 0))
     }
 }

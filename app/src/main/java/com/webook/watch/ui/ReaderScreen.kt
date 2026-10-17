@@ -81,8 +81,10 @@ import com.webook.watch.data.Chapter
 import com.webook.watch.data.ImageRef
 import com.webook.watch.data.SearchHit
 import com.webook.watch.data.Settings
+import com.webook.watch.data.chapterFitsBook
 import com.webook.watch.data.collectImages
 import com.webook.watch.data.parseImagePara
+import com.webook.watch.data.paraFitsChapter
 import com.webook.watch.text.Page
 import com.webook.watch.text.PageLine
 import com.webook.watch.text.PagePacker
@@ -140,6 +142,16 @@ fun ReaderScreen(
     var pageIdx by remember { mutableIntStateOf(initialPage) }
     var lines by remember { mutableStateOf<List<PageLine>>(emptyList()) }
     var pages by remember { mutableStateOf<List<Page>>(emptyList()) }
+    /**
+     * 当前 [lines] / [pages] 属于第几章。
+     *
+     * 切章后排版（LineBreaker）是**异步**的，中间有个窗口：章号已经换成新的，
+     * 行表还是旧章的。这期间如果照常上报进度，就会存下「新章号 + 旧章段落号」的脏档案，
+     * 下次打开会跳到莫名其妙的位置。进度上报前拿它对一下，不一致就宁可不报。
+     */
+    var laidOutChapter by remember {
+        mutableIntStateOf(if (chapterFitsBook(chapters, initialChapter)) initialChapter else 0)
+    }
     var showOverlay by remember { mutableStateOf(false) }
     /** 首次进入时要恢复到的精确位置（段落 + 段内偏移）；null 表示这次不用精确恢复 */
     var pendingRestore by remember {
@@ -246,18 +258,27 @@ fun ReaderScreen(
             launch {
                 // 重排前先记下「当前停在哪个字」——改字号/行距/开关状态栏之后，
                 // 排版结果会变，但那个字不会变，靠它把读者放回原处，不会莫名跳页。
-                val anchor = lines.getOrNull(
-                    if (scrollMode) lineAtTop else (pages.getOrNull(pageIdx)?.start ?: 0)
-                )?.let { it.paraIndex to it.charStart }
+                // 但只有"行表确实属于当前这一章"时才敢记：切章的这一刻 lines 还是上一章的，
+                // 拿它的段落号当锚点，等于把旧章的段号安到新章头上。
+                val anchor = if (laidOutChapter == chapterIdx) {
+                    lines.getOrNull(
+                        if (scrollMode) lineAtTop else (pages.getOrNull(pageIdx)?.start ?: 0)
+                    )?.let { it.paraIndex to it.charStart }
+                } else null
 
                 val ls = LineBreaker.layout(ch.paragraphs, paint, textW, paint.textSize * 2, maxImgH)
                 val ps = PagePacker.pack(ls, bodyH, lineHeightPx, paraGapPx)
                 lines = ls
                 pages = ps
+                laidOutChapter = chapterIdx      // 行表已换成这一章的，之后才能上报进度
                 // 定位优先级：段落跳转（搜索）> 页码（书签/目录）> 精确位置（续读/重排）
-                val para = pendingPara
+                // pendingRestore 要先验一下段落号是不是属于这一章 —— 存档脏了（章号与段落号
+                // 来自不同的章）就丢掉它，退回页码恢复，免得跳到书中部。
+                val para = pendingPara?.takeIf { paraFitsChapter(chapters, chapterIdx, it) }
                 val pg = pendingPage
-                val restore = pendingRestore ?: anchor
+                val restore = pendingRestore?.takeIf { paraFitsChapter(chapters, chapterIdx, it.first) } ?: anchor
+                pendingPara = null
+                pendingRestore = null
                 when {
                     para != null -> {
                         val li = ls.indexOfFirst { it.paraIndex == para }
@@ -287,6 +308,31 @@ fun ReaderScreen(
          */
         var autoTick by remember { mutableIntStateOf(0) }
 
+        /**
+         * 统一切章口 —— **所有**换章的地方都必须走这里，不要就地写 `chapterIdx++`。
+         *
+         * 切章不只是改两个数字：
+         * 1. 滑动模式的可视位置由 LazyColumn 和 [lineAtTop] 决定，旧行号不归零的话，
+         *    重排跑完之前进度上报会拿旧章的行号当成新章的位置 —— 用户看到的就是
+         *    「点下一章，进度莫名其妙跳一下」；
+         * 2. [pendingPage] / [pendingPara] / [pendingRestore] 是上一次定位留下的指令，
+         *    不清掉的话会跟着切到下一章去定位；
+         * 3. 立刻 scrollToItem(0, 0) 把列表钉回顶部，同时**掐断**正在跑的惯性滚动，
+         *    否则旧章的 fling 会继续把新章往下带。
+         */
+        fun gotoChapter(n: Int, vibrateNow: Boolean = true) {
+            val t = n.coerceIn(0, chapters.lastIndex.coerceAtLeast(0))
+            if (t == chapterIdx) return
+            chapterIdx = t
+            pageIdx = 0
+            lineAtTop = 0
+            pendingPage = null
+            pendingPara = null
+            pendingRestore = null
+            if (scrollMode) scope.launch { scroller.scrollToItem(0, 0) }
+            if (vibrateNow) onVibrate()
+        }
+
         fun goNext(auto: Boolean = false) {
             if (pages.isEmpty()) return
             if (!auto) autoTick++
@@ -294,10 +340,12 @@ fun ReaderScreen(
                 // 用固定 380ms 的线性动画（默认 spring 又慢又拖），滚完如果已经到底，
                 // 自动接上下一章 —— 否则自动翻页会在章末无声无息地"失灵"（1.0.24 的坑）
                 scope.launch {
+                    val chAtStart = chapterIdx      // 记住出发的章，动画结束时要确认还在这一章
                     scroller.animateScrollBy(hPx * 0.92f, tween(SCROLL_TURN_MS, easing = LinearEasing))
-                    if (!scroller.canScrollForward && chapterIdx < chapters.size - 1) {
-                        chapterIdx++
-                        pageIdx = 0
+                    // ⚠️ 必须核对 chapterIdx：动画要跑 380ms，这期间用户可能已经点了"下一章"。
+                    // 早先没核对，新章（往往很短）立刻就是"滚到底"，于是**一次点击连翻两章**。
+                    if (chapterIdx == chAtStart && !scroller.canScrollForward && chAtStart < chapters.size - 1) {
+                        gotoChapter(chAtStart + 1, vibrateNow = false)
                     }
                 }
                 if (!auto) onVibrate()
@@ -305,7 +353,7 @@ fun ReaderScreen(
             }
             scope.launch { slide.snapTo(wPx); slide.animateTo(0f, tween(220)) }
             if (pageIdx < pages.size - 1) { pageIdx++; if (!auto) onVibrate() }
-            else if (chapterIdx < chapters.size - 1) { chapterIdx++; pageIdx = 0; if (!auto) onVibrate() }
+            else if (chapterIdx < chapters.size - 1) gotoChapter(chapterIdx + 1, vibrateNow = !auto)
         }
         fun goPrev() {
             if (pages.isEmpty()) return
@@ -319,7 +367,7 @@ fun ReaderScreen(
             }
             scope.launch { slide.snapTo(-wPx); slide.animateTo(0f, tween(220)) }
             if (pageIdx > 0) { pageIdx--; onVibrate() }
-            else if (chapterIdx > 0) { chapterIdx--; pageIdx = 0; onVibrate() }
+            else if (chapterIdx > 0) gotoChapter(chapterIdx - 1)
         }
 
         // 音量键翻页：把翻页函数注册给 Activity
@@ -353,7 +401,7 @@ fun ReaderScreen(
                 onPageDown = { goNext() },
                 onPageUp = { goPrev() },
                 hasNextChapter = chapterIdx < chapters.size - 1,
-                onNextChapter = { chapterIdx++; pageIdx = 0 },
+                onNextChapter = { gotoChapter(chapterIdx + 1) },
                 onImageTap = { zoomImage = it; onVibrate() },
                 bottomInset = statusH
             )
@@ -442,7 +490,7 @@ fun ReaderScreen(
 
         // 用最新值包一层：Activity 进 onStop / 界面被收起时，调用的永远是"此刻"的位置
         val flushRef = rememberUpdatedState<() -> Unit>({
-            onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
+            if (laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
         })
         DisposableEffect(Unit) {
             onRegisterFlush { flushRef.value() }
@@ -452,9 +500,9 @@ fun ReaderScreen(
             }
         }
 
-        LaunchedEffect(chapterIdx, pageIdx, paraNow, charNow) {
+        LaunchedEffect(chapterIdx, pageIdx, paraNow, charNow, laidOutChapter) {
             delay(500)                    // 防抖：一路狂翻时只在停下来之后写一次
-            onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
+            if (laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
         }
 
         /* ---- 底部状态栏：百分比 + 时间，可在设置里关掉 ---- */
@@ -554,8 +602,8 @@ fun ReaderScreen(
                 showBrightness = settings.showBrightness,
                 onBack = onBack,
                 onOpenToc = { panel = Panel.TOC },
-                onPrevChapter = { if (chapterIdx > 0) { chapterIdx--; pageIdx = 0 } },
-                onNextChapter = { if (chapterIdx < chapters.size - 1) { chapterIdx++; pageIdx = 0 } },
+                onPrevChapter = { gotoChapter(chapterIdx - 1) },
+                onNextChapter = { gotoChapter(chapterIdx + 1) },
                 onSearch = { panel = Panel.SEARCH },
                 onAutoPage = {
                     // 3 / 5 / 10 / 20 / 30 / 关闭 循环；1、2 秒这种极限速度去设置里用滑杆调。
@@ -621,8 +669,8 @@ fun ReaderScreen(
                 chapters = chapters,
                 bookmarks = bookmarks,
                 chapterIdx = chapterIdx,
-                onJumpChapter = { i -> chapterIdx = i; pageIdx = 0 },
-                onJumpBookmark = { b -> chapterIdx = b.chapter; pendingPage = b.page },
+                onJumpChapter = { i -> gotoChapter(i) },
+                onJumpBookmark = { b -> gotoChapter(b.chapter); pendingPage = b.page },
                 onRemoveBookmark = onRemoveBookmark,
                 onClose = { panel = Panel.NONE }
             )
@@ -657,7 +705,7 @@ fun ReaderScreen(
                         }
                     }
                 },
-                onJump = { h -> chapterIdx = h.chapter; pendingPara = h.para },
+                onJump = { h -> gotoChapter(h.chapter); pendingPara = h.para },
                 onClose = { panel = Panel.NONE }
             )
             Panel.TYPO -> PanelShell("排版设置（界面）", onClose = { panel = Panel.NONE }) {

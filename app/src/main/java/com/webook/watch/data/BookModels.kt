@@ -53,6 +53,27 @@ fun imageParagraph(path: String, w: Int, h: Int): String = "$IMG_MARK$path\u0000
 fun Chapter.firstTextPara(): String = paragraphs.firstOrNull { parseImagePara(it) == null && it.isNotBlank() } ?: ""
 
 /**
+ * 存档里的「第几段的第几个字」是不是真的属于那一章。
+ *
+ * 为什么需要这道校验：切章时排版（LineBreaker）是**异步**的，中间存在一个窗口 ——
+ * 章号已经换成新的，行表 `lines` 还是旧章的。这时候若照常上报进度，就会存下
+ * 「新章号 + 旧章段落号」的脏档案。恢复时拿旧段落号去新章里找：
+ * 找到同名段落就跳到书中部，找不到就退回章首 —— 两种都是「进度恢复不对」。
+ *
+ * 所以恢复前先验范围：段落号必须落在该章的段落数之内，否则宁可退回按页码恢复。
+ * 纯函数，能直接进单测。
+ */
+fun paraFitsChapter(chapters: List<Chapter>, chapter: Int, para: Int): Boolean {
+    if (para < 0) return false
+    val n = chapters.getOrNull(chapter)?.paragraphs?.size ?: return false
+    return para < n
+}
+
+/** 存档里的章号是否还落在书的范围里（书被重导、章节数变了都会越界） */
+fun chapterFitsBook(chapters: List<Chapter>, chapter: Int): Boolean =
+    chapters.isNotEmpty() && chapter in chapters.indices
+
+/**
  * 阅读进度。
  *
  * 「读到哪儿」用 `para` + `charStart`（第几段的第几个字）表示，**不用页码**：
