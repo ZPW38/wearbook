@@ -6,7 +6,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 
-/** 系统 TTS 封装（不需要 WebView） */
+/** 系统 TTS 封装 */
 class Speaker(context: Context) : TextToSpeech.OnInitListener {
 
     private var tts: TextToSpeech? = null

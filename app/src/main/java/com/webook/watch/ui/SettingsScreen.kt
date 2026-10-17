@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -51,6 +54,8 @@ import com.webook.watch.data.Settings
 fun SettingsScreen(
     settings: Settings,
     onChange: () -> Unit,
+    /** 打开内置文件管理器选一个目录，作为「扫目录收书」的目标 */
+    onPickDir: () -> Unit,
     onBack: () -> Unit,
     onClearAll: () -> Unit,
     onOpenSystemSettings: () -> Unit
@@ -198,34 +203,90 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 3.dp)
                     )
-                    OutlinedTextField(
-                        value = scanText,
-                        onValueChange = { scanText = it },
-                        maxLines = 3,
-                        placeholder = {
-                            Text("/sdcard/Books;/storage/emulated/0/我的书", style = MaterialTheme.typography.labelSmall)
-                        },
-                        textStyle = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                    )
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        if (scanText.trim() != settings.scanDirs) {
-                            TextButton(onClick = { scanText = ""; settings.scanDirs = ""; onChange() }) {
-                                Text("恢复默认", style = MaterialTheme.typography.labelMedium)
+                    // 已选目录：每条一个，长的一行内滚动显示；点 × 可以去掉
+                    val picked = remember(settings.rev) {
+                        settings.scanDirs.split(';', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+                    }
+                    if (picked.isNotEmpty()) {
+                        picked.forEachIndexed { i, p ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                            ) {
+                                Row(
+                                    Modifier.padding(start = 10.dp, end = 2.dp, top = 5.dp, bottom = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        p,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = {
+                                            settings.scanDirs = picked.filterIndexed { j, _ -> j != i }.joinToString(";")
+                                            onChange()
+                                        },
+                                        modifier = Modifier.size(26.dp)
+                                    ) {
+                                        Text("×", style = MaterialTheme.typography.labelLarge,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                             }
                         }
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 主入口：用内置文件管理器选目录 —— 手表上敲路径太痛苦，还容易打错
                         Button(
-                            onClick = {
-                                settings.scanDirs = scanText.trim()
-                                onChange()
-                            },
-                            enabled = scanText.trim() != settings.scanDirs,
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp)
-                        ) { Text("保存", style = MaterialTheme.typography.labelMedium) }
+                            onClick = onPickDir,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                            modifier = Modifier.height(32.dp)
+                        ) { Text("浏览文件夹…", style = MaterialTheme.typography.labelMedium) }
+                        if (scanText.trim() != settings.scanDirs) {
+                            Button(
+                                onClick = {
+                                    settings.scanDirs = scanText.trim()
+                                    onChange()
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                                modifier = Modifier.height(32.dp)
+                            ) { Text("保存手输", style = MaterialTheme.typography.labelMedium) }
+                        }
+                        if (settings.scanDirs.isNotBlank()) {
+                            TextButton(
+                                onClick = { scanText = ""; settings.scanDirs = ""; onChange() },
+                                contentPadding = PaddingValues(horizontal = 6.dp)
+                            ) { Text("恢复默认", style = MaterialTheme.typography.labelMedium) }
+                        }
+                    }
+                    // 手输框降级成"高级用法"：默认折叠，需要时才展开
+                    var showRaw by remember { mutableStateOf(false) }
+                    if (showRaw) {
+                        OutlinedTextField(
+                            value = scanText,
+                            onValueChange = { scanText = it },
+                            maxLines = 2,
+                            placeholder = { Text("多个目录用分号隔开", style = MaterialTheme.typography.labelSmall) },
+                            textStyle = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().padding(top = 6.dp)
+                        )
+                    } else {
+                        Text(
+                            "高级用法：手动输入路径（分号分隔）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .padding(top = 4.dp)
+                                .clickable { showRaw = true; scanText = settings.scanDirs }
+                        )
                     }
                 }
             }

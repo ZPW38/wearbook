@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -309,24 +310,30 @@ private fun UrlImportCard(
         color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
     ) {
-        Column(Modifier.padding(10.dp)) {
+        Column(Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onToggle() }
             ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_description),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp).padding(end = 5.dp)
+                )
                 Text(
-                    "链接导入（http/https 直链）",
-                    style = MaterialTheme.typography.labelLarge,
+                    "链接导入",
+                    style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f)
                 )
                 Text(
                     if (expanded) "−" else "＋",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(end = 4.dp)
+                    modifier = Modifier.padding(end = 2.dp)
                 )
             }
             // 折叠态下只留标题这一行（约 28dp），把整块屏幕让给下面的文件列表
@@ -345,12 +352,12 @@ private fun UrlImportCard(
                 Button(
                     onClick = { onStart(url) },
                     enabled = url.isNotBlank() && job == null,
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp),
-                    modifier = Modifier.height(32.dp)
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                    modifier = Modifier.height(28.dp)
                 ) {
                     Text(
                         if (job == null) "下载" else "下载中",
-                        style = MaterialTheme.typography.labelMedium
+                        style = MaterialTheme.typography.labelSmall
                     )
                 }
             }
@@ -362,8 +369,8 @@ private fun UrlImportCard(
                 placeholder = {
                     Text("https:// 直链，如 xxx.epub", style = MaterialTheme.typography.labelSmall)
                 },
-                textStyle = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                textStyle = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
             )
 
             val err = job?.error
@@ -398,7 +405,7 @@ private fun UrlImportCard(
                     "只支持不需要登录、点开就能存成文件的直链",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp)
+                    modifier = Modifier.padding(top = 3.dp)
                 )
             }
         }

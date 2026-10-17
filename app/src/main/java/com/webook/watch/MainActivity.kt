@@ -64,6 +64,7 @@ import com.webook.watch.tts.Speaker
 import com.webook.watch.ui.FmEntry
 import com.webook.watch.ui.ImportScreen
 import com.webook.watch.ui.ConfirmBox
+import com.webook.watch.ui.DirPickerScreen
 import com.webook.watch.ui.LibraryScreen
 import com.webook.watch.ui.ReaderScreen
 import com.webook.watch.ui.SettingsScreen
@@ -122,6 +123,11 @@ class MainActivity : ComponentActivity() {
 
     /** 正在扫描目录收书 */
     private var scanning by mutableStateOf(false)
+
+    /** 目录选择器（扫目录收书选路径用）的浏览栈 */
+    private var pickStack by mutableStateOf<List<File>>(emptyList())
+    private var pickEntries by mutableStateOf<List<FmEntry>>(emptyList())
+    private var pickBlocked by mutableStateOf(false)
     private var lastBackAt = 0L
 
     data class Confirm(val title: String, val body: String, val action: () -> Unit)
@@ -131,6 +137,7 @@ class MainActivity : ComponentActivity() {
         storageGranted = ok
         if (ok) {
             if (dirStack.isEmpty()) dirStack.add(storageRoot())
+        if (pickStack.isEmpty()) pickStack = listOf(storageRoot())
             refreshDir()
         } else {
             toast("未获得存储权限，无法浏览设备文件")
@@ -354,10 +361,25 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
 
+                            "pickdir" -> DirPickerScreen(
+                                currentPath = pickStack.lastOrNull()?.absolutePath ?: "",
+                                entries = pickEntries,
+                                canGoUp = pickStack.size > 1,
+                                storageBlocked = pickBlocked,
+                                onOpen = { e ->
+                                    if (pickStack.lastOrNull()?.absolutePath != e.file.absolutePath) pickStack = pickStack + e.file
+                                    refreshPickDir()
+                                },
+                                onGoUp = { if (pickStack.size > 1) { pickStack = pickStack.dropLast(1); refreshPickDir() } },
+                                onPick = { pickCurrentDir() },
+                                onBack = { screen = "settings" }
+                            )
+
                             "settings" -> SettingsScreen(
                                 settings = settings,
                                 onChange = { mutate { }; speaker.rate = settings.speechRate; applySystemSettings() },
                                 onBack = { screen = "library"; refresh() },
+                                onPickDir = { openDirPicker() },
                                 onOpenSystemSettings = {
                                     runCatching { startActivity(Intent(android.provider.Settings.ACTION_SETTINGS)) }
                                         .onFailure { toast("打不开系统设置，请手动去「设置 → 手势」里关闭侧滑返回") }
@@ -630,6 +652,40 @@ class MainActivity : ComponentActivity() {
         is OutOfMemoryError -> "内存不足，这本书太大了"
         is StackOverflowError -> "文件结构太复杂，解析失败"
         else -> e.message ?: e.javaClass.simpleName
+    }
+
+    /* ---------------- 目录选择器：给「扫目录收书」选路径 ---------------- */
+
+    /** 只列目录：选书路径时列文件没有意义，还会把列表撑满 */
+    private fun refreshPickDir() {
+        val dir = pickStack.lastOrNull() ?: run { pickEntries = emptyList(); pickBlocked = false; return }
+        val list = dir.listFiles()
+        if (list == null) {
+            pickEntries = emptyList(); pickBlocked = true; return
+        }
+        pickEntries = list
+            .filter { it.isDirectory && it.canRead() }
+            .sortedBy { it.name.lowercase() }
+            .map { FmEntry(it.name, true, it) }
+        pickBlocked = false
+    }
+
+    private fun openDirPicker() {
+        pickStack = listOf(storageRoot())
+        refreshPickDir()
+        screen = "pickdir"
+    }
+
+    /** 把当前目录加进扫描列表；已存在就不重复加 */
+    private fun pickCurrentDir() {
+        val dir = pickStack.lastOrNull() ?: return
+        val path = dir.absolutePath
+        val existing = settings.scanDirs.split(';', '\n').map { it.trim() }.filter { it.isNotEmpty() }
+        if (existing.none { it == path }) {
+            settings.scanDirs = (existing + path).joinToString(";")
+        }
+        toast("已加入扫描目录\n$path")
+        screen = "settings"
     }
 
     /* ---------------- 链接导入：填一个 http(s) 直链，把书下载下来 ---------------- */
