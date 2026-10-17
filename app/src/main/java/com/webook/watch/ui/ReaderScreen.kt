@@ -1378,8 +1378,8 @@ private fun ImageZoomView(
                     Text(
                         "${index + 1} / $total",
                         color = Color.White.copy(alpha = 0.95f),
-                        style = MaterialTheme.typography.labelMedium,
-                        // 等宽数字，1→9 换到 10 时整条不会左右抖动
+                        // 等宽数字（tnum）：1→9 换到 10、99 换到 100 时整条不会左右抖动
+                        style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
                         modifier = Modifier.padding(horizontal = 2.dp)
                     )
                     GalleryArrow(
