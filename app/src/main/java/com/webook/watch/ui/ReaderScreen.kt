@@ -231,6 +231,10 @@ fun ReaderScreen(
         val bodyH = (hPx - padY * 2 - statusH).coerceAtLeast(lineHeightPx * 3f)
 
         // 插图：zip 内路径 -> 解码好的位图（值是 null 表示文件不在或解码失败，画占位框）
+        //
+        // ⚠️ 必须有上限。缓存原本只增不减，翻完一本插图多的书（比如 1100 章、每章一张整页图的
+        // 漫画 epub），一千多张 Bitmap 全常驻内存 —— 手表只有 96MB 堆，必 OOM。
+        // 按屏宽解码后单张约 200KB，留 12 张够用（当前页 + 前后几页），再多纯属浪费。
         val imgCache = remember { mutableStateMapOf<String, android.graphics.Bitmap?>() }
         val imagePaint = remember { android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG) }
         // 一张插图最多占版面高度的 62%，再长就等比缩小，免得一整页只有一张图
@@ -251,6 +255,11 @@ fun ReaderScreen(
                     EpubImages.load(bookPath, ref, lines[i].imgW.toInt())
                 }
                 imgCache[ref.path] = b
+                // 超出上限就淘汰最早插入的那张（LinkedHashMap 语义：keys.first 就是最旧的）
+                while (imgCache.size > MAX_IMG_CACHE) {
+                    val oldest = imgCache.keys.firstOrNull() ?: break
+                    imgCache.remove(oldest)
+                }
             }
         }
 
@@ -1204,6 +1213,9 @@ private fun RowScope.TextIconButton(
         )
     }
 }
+
+/** 插图缓存上限：当前页 + 前后若干页，够翻页不卡，又不至于把内存吃穿 */
+private const val MAX_IMG_CACHE = 12
 
 /** 当前时间，形如 14:35（状态栏用） */
 private fun clockText(): String =
