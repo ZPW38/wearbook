@@ -108,6 +108,47 @@ class LibraryStore(private val ctx: Context) {
         return meta
     }
 
+    /**
+     * 就地更新一本书（同一本书的新版本）。
+     *
+     * **刻意保留原来的 id**：id 是章节文件、封面文件名、阅读进度、书签的外键，
+     * 换新 id 等于把这本书的阅读历史全丢掉。更新完读者翻开新月版，还停在原来那一章。
+     *
+     * 旧章节文件直接覆盖写 —— 不先删再写，免得写到一半失败留下"有 meta 没内容"的空书。
+     */
+    fun update(
+        id: String, title: String, author: String, fmt: String, size: Long,
+        chapters: List<Chapter>, cover: Bitmap? = null, source: String? = null
+    ): Boolean {
+        val list = list().toMutableList()
+        val i = list.indexOfFirst { it.id == id }
+        if (i < 0) return false
+
+        File(chapterDir, "$id.json").bufferedWriter().use { w -> chaptersToJson(chapters, w) }
+
+        var coverName = list[i].cover
+        if (cover != null) {
+            coverName = "$id.jpg"
+            runCatching {
+                File(coverDir, coverName).outputStream().use {
+                    cover.compress(Bitmap.CompressFormat.JPEG, 72, it)
+                }
+            }
+        }
+        list[i] = list[i].copy(
+            title = title,
+            author = author,
+            fmt = fmt,
+            chapterCount = chapters.size,
+            size = size,
+            cover = coverName,
+            // 新版是别的文件时，插图要跟着改读到新文件去
+            source = source ?: list[i].source
+        )
+        save(list)
+        return true
+    }
+
     fun remove(id: String) {
         save(list().filter { it.id != id })
         File(chapterDir, "$id.json").delete()
@@ -174,7 +215,8 @@ class LibraryStore(private val ctx: Context) {
         saveProgress(map)
     }
 
-    private fun saveProgress(map: Map<String, Progress>) {
+    /** 更新进度时调用；更新书籍后要把迁移过的进度写回去 */
+    fun saveProgress(map: Map<String, Progress>) {
         val o = JSONObject()
         map.forEach { (k, v) ->
             o.put(

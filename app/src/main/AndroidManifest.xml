@@ -55,7 +55,8 @@
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
+                <!-- BROWSABLE 是给"从浏览器点链接打开"用的，这里只处理本地文件，
+                     留着会让 lint 报 Missing URL（有 BROWSABLE 却没声明 scheme/host） -->
                 <data android:mimeType="application/epub+zip" />
                 <data android:mimeType="application/x-mobipocket-ebook" />
                 <data android:mimeType="application/vnd.amazon.ebook" />

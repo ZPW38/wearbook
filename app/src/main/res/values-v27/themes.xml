@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      windowLayoutInDisplayCutoutMode 是 API 27 才有的属性。
+      放在 values/ 里会让 minSdk 24 的机器读到不认识的属性（lint 报 NewApi）；
+      放这里就只在 27+ 生效，24~26 忽略，正好。
+      手表基本没有刘海，这条主要是给"能装在手环/异形屏设备上"兜底。
+    -->
+    <style name="Theme.WearBook" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+        <item name="android:windowSwipeToDismiss">false</item>
+    </style>
+</resources>

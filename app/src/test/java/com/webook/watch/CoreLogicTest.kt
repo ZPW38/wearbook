@@ -1,6 +1,8 @@
 package com.webook.watch
 
 import com.webook.watch.data.Chapter
+import com.webook.watch.data.Progress
+import com.webook.watch.data.BookMerge
 import com.webook.watch.data.ImageRef
 import com.webook.watch.data.BookScanner
 import com.webook.watch.data.UrlImport
@@ -18,6 +20,8 @@ import com.webook.watch.ui.findLineFor
 import com.webook.watch.text.PagePacker
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /** 纯逻辑单测：分页装配 + PalmDOC 解压（不依赖 Android，JVM 直接跑） */
@@ -446,4 +450,97 @@ class CoreLogicTest {
         assertTrue(!BookScanner.isBookName("z.pdf"))
         assertTrue(!BookScanner.isBookName("noext"))
     }
+
+    /* ---------- 同一本书的更新：认书 / 比对 / 迁进度（1.6.0） ---------- */
+
+    private fun ch(t: String, vararg ps: String) = Chapter(t, ps.toList())
+
+    @Test
+    fun `书名归一化去掉版本噪音`() {
+        assertEquals("长安异闻录", BookMerge.normTitle("《长安异闻录》（全本精校版）.txt"))
+        assertEquals("长安异闻录", BookMerge.normTitle("长安异闻录【完结】"))
+        assertEquals("mobydick", BookMerge.normTitle("Moby Dick.epub"))
+        assertEquals("长安异闻录", BookMerge.normTitle(" 长安 异闻录 "))
+    }
+
+    @Test
+    fun `章节标题归一化去掉序号前缀`() {
+        assertEquals("夜半钟声", BookMerge.normChapter("第一章 夜半钟声"))
+        assertEquals("夜半钟声", BookMerge.normChapter("第12章 夜半钟声"))
+        assertEquals("夜半钟声", BookMerge.normChapter("12. 夜半钟声"))
+        assertEquals("夜半钟声", BookMerge.normChapter("Chapter 12: 夜半钟声"))
+        // 去掉序号后仍保留章节名本身
+        assertNotEquals(BookMerge.normChapter("第一章 夜半钟声"), BookMerge.normChapter("第二章 西市旧事"))
+    }
+
+    @Test
+    fun `同名书且章节前缀一致 判为同一本且是纯追加`() {
+        val old = listOf(ch("第一章 甲", "a"), ch("第二章 乙", "b"))
+        val new = old + listOf(ch("第三章 丙", "c"), ch("第四章 丁", "d"))
+        val d = BookMerge.diff("某书", old, "某书", new)
+        assertTrue(d.sameBook)
+        assertTrue(d.isPureAppend)
+        assertEquals(2, d.added)
+        assertEquals(0, d.removed)
+        assertEquals(0, d.rewritten)
+    }
+
+    @Test
+    fun `名字不同但章节高度重合 也算同一本`() {
+        val old = listOf(ch("第一章 甲", "a"), ch("第二章 乙", "b"), ch("第三章 丙", "c"))
+        val new = listOf(ch("第一章 甲", "a"), ch("第二章 乙", "b"), ch("第三章 丙", "c"))
+        val d = BookMerge.diff("旧名字", old, "新名字", new)
+        assertTrue("章节完全一致应判为同一本", d.sameBook)
+    }
+
+    @Test
+    fun `毫不相干的两本书不会被误判`() {
+        val old = listOf(ch("第一章 甲", "a"), ch("第二章 乙", "b"))
+        val other = listOf(ch("序章 楔子", "x"), ch("第一章 别的东西", "y"))
+        val d = BookMerge.diff("某书", old, "另一本", other)
+        assertFalse(d.sameBook)
+    }
+
+    @Test
+    fun `正文被改写要能识别出来`() {
+        val old = listOf(ch("第一章 甲", "原内容"))
+        val new = listOf(ch("第一章 甲", "改过的内容"))
+        val d = BookMerge.diff("某书", old, "某书", new)
+        assertTrue(d.sameBook)
+        assertEquals(1, d.rewritten)
+        assertFalse(d.isPureAppend)
+    }
+
+    @Test
+    fun `进度按章节名迁移到新版本`() {
+        val old = listOf(ch("第一章 甲", "a"), ch("第二章 乙", "b1", "b2", "b3"))
+        // 新版在最前面插了一个序章，章号整体后移
+        val new = listOf(ch("序章 引子", "p"), ch("第一章 甲", "a"), ch("第二章 乙", "b1", "b2", "b3"))
+        val oldP = Progress(chapter = 1, para = 2, charStart = 5, frac = 0.75f)
+        val moved = BookMerge.migrate(oldP, old, new)
+        assertEquals("应落在新的第二章（索引 2）", 2, moved.chapter)
+        assertEquals(2, moved.para)
+        assertEquals(5, moved.charStart)
+    }
+
+    @Test
+    fun `章节被删掉时按相对位置放回 不会乱跳`() {
+        val old = (1..10).map { ch("第${it}章 内容$it", "x") }
+        val new = (1..5).map { ch("第${it}章 内容$it", "x") }   // 后五章没了
+        val oldP = Progress(chapter = 9, para = 3, charStart = 0, frac = 0.95f)
+        val moved = BookMerge.migrate(oldP, old, new)
+        assertTrue("索引必须落在新书范围内", moved.chapter in 0..4)
+        assertEquals("找不到同章时段落号归零，宁可让读者往前翻", 0, moved.para)
+    }
+
+    @Test
+    fun `新章节更短时段落号要收进范围`() {
+        val old = listOf(ch("第一章 甲", *Array(30) { "段$it" }))
+        val new = listOf(ch("第一章 甲", "只剩一段"))
+        val oldP = Progress(chapter = 0, para = 25, charStart = 3)
+        val moved = BookMerge.migrate(oldP, old, new)
+        assertEquals(0, moved.chapter)
+        assertEquals("段落号不能超过新章节的段数", 0, moved.para)
+    }
+
 }

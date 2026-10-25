@@ -62,10 +62,12 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.webook.watch.data.AppVersion
+import com.webook.watch.data.BookMerge
 import com.webook.watch.data.BookMeta
 import com.webook.watch.data.BookScanner
 import com.webook.watch.data.Chapter
 import com.webook.watch.data.LibraryStore
+import com.webook.watch.data.Progress
 import com.webook.watch.data.Settings
 import com.webook.watch.data.UrlImport
 import com.webook.watch.parser.BookParser
@@ -79,6 +81,7 @@ import com.webook.watch.ui.ConfirmBox
 import com.webook.watch.ui.DirPickerScreen
 import com.webook.watch.ui.LibraryScreen
 import com.webook.watch.ui.ReaderScreen
+import com.webook.watch.ui.UpdateDialog
 import com.webook.watch.ui.SettingsScreen
 import com.webook.watch.ui.theme.WearBookTheme
 import kotlinx.coroutines.Dispatchers
@@ -139,6 +142,9 @@ class MainActivity : ComponentActivity() {
     /** 正在扫描目录收书 */
     private var scanning by mutableStateOf(false)
 
+    /** 检测到「书架里已有同一本书的旧版本」，等用户选更新还是保留两本 */
+    private var pendingUpdate by mutableStateOf<ImportOutcome.UpdateOffer?>(null)
+
     /** 目录选择器（扫目录收书选路径用）的浏览栈 */
     private var pickStack by mutableStateOf<List<File>>(emptyList())
     private var pickEntries by mutableStateOf<List<FmEntry>>(emptyList())
@@ -152,7 +158,7 @@ class MainActivity : ComponentActivity() {
         storageGranted = ok
         if (ok) {
             if (dirStack.isEmpty()) dirStack.add(storageRoot())
-        if (pickStack.isEmpty()) pickStack = listOf(storageRoot())
+            if (pickStack.isEmpty()) pickStack = listOf(storageRoot())
             refreshDir()
         } else {
             toast("未获得存储权限，无法浏览设备文件")
@@ -452,6 +458,20 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // 统一的 Material 3 对话框（跟随主题、带动画）
+                    // 同一本书的新版本：更新 / 两本都留 / 取消
+                    pendingUpdate?.let { offer ->
+                        UpdateDialog(
+                            bookTitle = offer.existing.title,
+                            oldChapters = offer.diff.oldChapterCount,
+                            newChapters = offer.diff.newChapterCount,
+                            summary = offer.diff.summary(),
+                            pureAppend = offer.diff.isPureAppend,
+                            onUpdate = { applyUpdate(offer) },
+                            onKeepBoth = { keepBoth(offer) },
+                            onCancel = { pendingUpdate = null }
+                        )
+                    }
+
                     // 自己画的紧凑确认框：M3 的 AlertDialog 在 320×360 上会把按钮挤出屏幕，
                     // 长按删除后"确定/取消"都点不到，只能按返回逃出来
                     confirm?.let { c ->
@@ -678,31 +698,93 @@ class MainActivity : ComponentActivity() {
      * epub 只需要文件本身（走 ZipFile 逐章读），所以 bytes 传 null —— 千万别为了 epub 整读文件，
      * 一本 171MB 的 epub 会把 96MB 堆的手表直接打崩（用户实测 OOM 闪退）。
      */
-    private suspend fun parseAndStore(name: String, bytes: ByteArray?, epubSrc: File?): Pair<ParsedBook, Boolean> {
+    /**
+     * 一次导入的结局。
+     *
+     * 多出 [UpdateOffer] 这一支，是因为"同一本书的新版本"不该被当成新书塞进书架 ——
+     * 那样会出现两本同名书，而读者的进度还留在旧的那本上。
+     */
+    private sealed class ImportOutcome {
+        class Added(val parsed: ParsedBook) : ImportOutcome()
+        class Duplicate(val parsed: ParsedBook) : ImportOutcome()
+
+        /** 书架上已有这本书的旧版本：先不入库，等用户拍板 */
+        class UpdateOffer(
+            val parsed: ParsedBook,
+            val existing: BookMeta,
+            val oldChapters: List<Chapter>,
+            val diff: BookMerge.Diff,
+            val sizeBytes: Long,
+            val source: String?
+        ) : ImportOutcome()
+    }
+
+    private suspend fun parseAndStore(
+        name: String, bytes: ByteArray?, epubSrc: File?,
+        allowUpdate: Boolean = true
+    ): ImportOutcome {
         val sizeBytes = epubSrc?.length() ?: bytes?.size?.toLong() ?: 0L
         val parsed =
             if (name.endsWith(".epub", true) && epubSrc != null) BookParser.epubToBook(epubSrc, name)
             else BookParser.parse(File(""), name, bytes ?: ByteArray(0))
-        // 同一本书（书名 + 格式 + 章节数都一样）不重复入库 ——
-        // 用户嫌没反应连点几下，之前会往书架里塞好几本一模一样的
-        val dup = store.list().any {
-            it.title == parsed.title && it.fmt == parsed.fmt && it.chapterCount == parsed.chapters.size
-        }
-        if (dup) return parsed to true
         // epub 记下原文件路径：插图不预先抽取，阅读时按需从这里读
         val source = if (parsed.fmt == "epub") epubSrc?.absolutePath else null
+        val existing = store.list()
+
+        // 第一层：一模一样（书名 + 格式 + 章节数都相同）→ 直接当重复，不打扰用户。
+        // 用户嫌没反应连点几下，之前会往书架里塞好几本一模一样的
+        val exactDup = existing.any {
+            it.title == parsed.title && it.fmt == parsed.fmt && it.chapterCount == parsed.chapters.size
+        }
+        if (exactDup) return ImportOutcome.Duplicate(parsed)
+
+        // 第二层：书名归一化后相同 → 可能是同一本的新版本，深入比一章列表
+        if (allowUpdate) {
+            val normNew = BookMerge.normTitle(parsed.title)
+            if (normNew.isNotEmpty()) {
+                val candidate = existing.firstOrNull { BookMerge.normTitle(it.title) == normNew }
+                if (candidate != null) {
+                    val oldChapters = store.chapters(candidate.id)
+                    if (oldChapters.isNotEmpty()) {
+                        val d = BookMerge.diff(candidate.title, oldChapters, parsed.title, parsed.chapters)
+                        if (d.sameBook) {
+                            return ImportOutcome.UpdateOffer(parsed, candidate, oldChapters, d, sizeBytes, source)
+                        }
+                    }
+                }
+            }
+        }
+
         store.add(parsed.title, parsed.author, parsed.fmt, sizeBytes, parsed.chapters, parsed.cover, source)
-        return parsed to false
+        return ImportOutcome.Added(parsed)
     }
 
     /** quiet = true 用于批量扫描：一口气收 10 本时不该弹 10 次 toast */
-    private suspend fun finishImport(parsed: ParsedBook, duplicated: Boolean, quiet: Boolean = false) {
+    private suspend fun finishImport(outcome: ImportOutcome, quiet: Boolean = false) {
         withContext(Dispatchers.Main) {
-            refresh()
-            if (!quiet) {
-                toast(if (duplicated) "《${parsed.title}》已经在书架里了" else "已导入《${parsed.title}》")
+            when (outcome) {
+                is ImportOutcome.Added -> {
+                    refresh()
+                    if (!quiet) toast("已导入《${outcome.parsed.title}》")
+                    screen = "library"
+                }
+                is ImportOutcome.Duplicate -> {
+                    refresh()
+                    if (!quiet) toast("《${outcome.parsed.title}》已经在书架里了")
+                    screen = "library"
+                }
+                is ImportOutcome.UpdateOffer -> {
+                    // 批量扫描不弹窗：一口气扫十本时没法挨个问，直接保留旧的
+                    if (quiet) {
+                        refresh()
+                        toast("《${outcome.parsed.title}》已存在，已跳过")
+                        screen = "library"
+                    } else {
+                        importing = null
+                        pendingUpdate = outcome
+                    }
+                }
             }
-            screen = "library"
         }
     }
 
@@ -720,8 +802,8 @@ class MainActivity : ComponentActivity() {
                 }
                 // epub 不需要字节数组（ZipFile 逐章读），传 null 省掉一整份文件的内存
                 val bytes = if (isEpub) null else file.readBytes()
-                val (parsed, dup) = parseAndStore(file.name, bytes, file)
-                finishImport(parsed, dup)
+                val outcome = parseAndStore(file.name, bytes, file)
+                finishImport(outcome)
             } catch (e: Throwable) {
                 // 连 OutOfMemoryError 一起接住：宁可提示一句，也不要整个 App 闪退
                 withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
@@ -736,6 +818,75 @@ class MainActivity : ComponentActivity() {
         is OutOfMemoryError -> "内存不足，这本书太大了"
         is StackOverflowError -> "文件结构太复杂，解析失败"
         else -> e.message ?: e.javaClass.simpleName
+    }
+
+    /* ---------------- 同一本书的新版本：更新 / 保留两本 ---------------- */
+
+    /**
+     * 用新版本覆盖旧书，并把阅读进度迁过去。
+     *
+     * 保留原 id（章节文件、封面、进度、书签全都挂在它上面），所以更新完再翻开，
+     * 还停在原来那一章 —— 这正是"更新"和"又存了一本"的区别。
+     */
+    private fun applyUpdate(offer: ImportOutcome.UpdateOffer) {
+        pendingUpdate = null
+        if (importing != null) { toast("正在导入，请稍候…"); return }
+        importing = offer.parsed.title
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // 先按标题把旧进度搬到新章节结构上，再落盘
+                val oldProgress = store.allProgress()[offer.existing.id] ?: Progress()
+                val migrated = BookMerge.migrate(oldProgress, offer.oldChapters, offer.parsed.chapters)
+
+                val ok = store.update(
+                    id = offer.existing.id,
+                    title = offer.parsed.title,
+                    author = offer.parsed.author,
+                    fmt = offer.parsed.fmt,
+                    size = offer.sizeBytes,
+                    chapters = offer.parsed.chapters,
+                    cover = offer.parsed.cover,
+                    source = offer.source
+                )
+                if (ok) {
+                    val m = store.allProgress().toMutableMap()
+                    m[offer.existing.id] = migrated
+                    store.saveProgress(m)
+                }
+                withContext(Dispatchers.Main) {
+                    refresh()
+                    if (ok) {
+                        val where = if (migrated.hasExact) "第 ${migrated.chapter + 1} 章" else "开头附近"
+                        toast("已更新到新版（${offer.parsed.chapters.size} 章），\n进度已迁到$where")
+                    } else {
+                        toast("更新失败：书架里找不到这本书了")
+                    }
+                    screen = "library"
+                }
+            } catch (e: Throwable) {
+                withContext(Dispatchers.Main) { toast("更新失败：${friendlyError(e)}") }
+            } finally {
+                withContext(Dispatchers.Main) { importing = null }
+            }
+        }
+    }
+
+    /** 当成一本新书存进去（书名可能带版本后缀，两本并存） */
+    private fun keepBoth(offer: ImportOutcome.UpdateOffer) {
+        pendingUpdate = null
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                store.add(
+                    offer.parsed.title, offer.parsed.author, offer.parsed.fmt,
+                    offer.sizeBytes, offer.parsed.chapters, offer.parsed.cover, offer.source
+                )
+                withContext(Dispatchers.Main) {
+                    refresh(); toast("已作为新书导入（两本并存）"); screen = "library"
+                }
+            } catch (e: Throwable) {
+                withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
+            }
+        }
     }
 
     /* ---------------- 目录选择器：给「扫目录收书」选路径 ---------------- */
@@ -826,9 +977,10 @@ class MainActivity : ComponentActivity() {
             }
             // epub 不读成字节数组（ZipFile 逐章读），传 null 省掉一整份文件的内存
             val bytes = if (isEpub) null else src.readBytes()
-            val (parsed, dup) = parseAndStore(name, bytes, if (isEpub) src else null)
-            if (fromScan && !dup) store.markScanned(listOf(BookScanner.keyOf(downloaded)))
-            finishImport(parsed, dup, quiet = fromScan)
+            val outcome = parseAndStore(name, bytes, if (isEpub) src else null, allowUpdate = !fromScan)
+            // 只有真正入库了才记账（重复/更新候选都不算"收进来"）
+            if (fromScan && outcome is ImportOutcome.Added) store.markScanned(listOf(BookScanner.keyOf(downloaded)))
+            finishImport(outcome, quiet = fromScan)
         } catch (e: Throwable) {
             withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
         } finally {
@@ -924,9 +1076,9 @@ class MainActivity : ComponentActivity() {
                     }
                     if (keep.exists()) keep else tmp
                 } else tmp
-                val (parsed, dup) = parseAndStore(name, if (isEpub) null else tmp.readBytes(), srcFile)
+                val outcome = parseAndStore(name, if (isEpub) null else tmp.readBytes(), srcFile)
                 if (!isEpub) tmp.delete()
-                finishImport(parsed, dup)
+                finishImport(outcome)
             } catch (e: Throwable) {
                 tmp.delete()
                 withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
