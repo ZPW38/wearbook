@@ -136,7 +136,9 @@ fun ReaderScreen(
      * 界面被收起 / Activity 进 onStop 时调用 —— 防抖还没到点就切走或划掉任务卡，
      * 也能保证最后一次读到哪儿被写进磁盘，而不是等到下次翻开才发现回到老地方。
      */
-    onRegisterFlush: ((() -> Unit)?) -> Unit = {}
+    onRegisterFlush: ((() -> Unit)?) -> Unit = {},
+    /** 切到漫画模式；null 表示这本书没有插图，不显示入口 */
+    onComic: (() -> Unit)? = null
 ) {
     var chapterIdx by remember { mutableIntStateOf(initialChapter.coerceIn(0, chapters.lastIndex.coerceAtLeast(0))) }
     var pageIdx by remember { mutableIntStateOf(initialPage) }
@@ -722,6 +724,7 @@ fun ReaderScreen(
             }
             Panel.OTHER -> PanelShell("其它设置", onClose = { panel = Panel.NONE }) {
                 OtherPanel(
+                    onComic = onComic,
                     settings = settings,
                     onMutate = onMutate,
                     onApplySystem = onApplySystem,

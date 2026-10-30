@@ -16,6 +16,8 @@ import com.webook.watch.parser.BookParser
 import com.webook.watch.parser.MobiParser
 import com.webook.watch.parser.PalmDoc
 import com.webook.watch.text.PageLine
+import com.webook.watch.ui.ComicDetect
+import com.webook.watch.ui.comicPages
 import com.webook.watch.ui.findLineFor
 import com.webook.watch.text.PagePacker
 import org.junit.Assert.assertEquals
@@ -541,6 +543,57 @@ class CoreLogicTest {
         val moved = BookMerge.migrate(oldP, old, new)
         assertEquals(0, moved.chapter)
         assertEquals("段落号不能超过新章节的段数", 0, moved.para)
+    }
+
+
+    /* ---------- 漫画模式：展平 / 自动判定（1.7.0） ---------- */
+
+    private fun imgPara(path: String) = imageParagraph(path, 1000, 1500)
+
+    @Test
+    fun `整本书的插图按章节顺序摊平成一页页`() {
+        val chapters = listOf(
+            Chapter("第一章", listOf("文字", imgPara("a.jpeg"))),
+            Chapter("第二章", listOf(imgPara("b.jpeg"), "文字", imgPara("c.jpeg")))
+        )
+        val pages = comicPages(chapters)
+        assertEquals(3, pages.size)
+        assertEquals(0, pages[0].chapter); assertEquals("a.jpeg", pages[0].ref.path)
+        assertEquals(1, pages[1].chapter); assertEquals("b.jpeg", pages[1].ref.path)
+        assertEquals(2, pages[2].para);    assertEquals("c.jpeg", pages[2].ref.path)
+    }
+
+    @Test
+    fun `纯图画的章节被判为漫画`() {
+        // 每章 3 张整页图、几乎没有字
+        val chapters = (1..3).map { i ->
+            Chapter("第${i}话", listOf(imgPara("p$i-1.jpeg"), imgPara("p$i-2.jpeg"), imgPara("p$i-3.jpeg")))
+        }
+        assertTrue(ComicDetect.looksLikeComic(chapters))
+    }
+
+    @Test
+    fun `纯文字的章节不是漫画`() {
+        val chapters = (1..3).map { i ->
+            Chapter("第${i}章", (1..20).map { "这是第${it}段正文内容，比较长的一段话。" })
+        }
+        assertFalse(ComicDetect.looksLikeComic(chapters))
+    }
+
+    @Test
+    fun `一章一张整页图加大量正文 不自动进漫画模式`() {
+        // 真实场景：《让你改装机娘》那种书 —— 每章 1 张整页图 + 两千多字
+        val chapters = (1..5).map { i ->
+            Chapter("第${i}章", listOf(imgPara("c$i.jpeg")) + (1..25).map { "正文段落$it，大约一百字左右的篇幅内容。" })
+        }
+        assertFalse("自动判定不该抢走这类书（正文才是主体）", ComicDetect.looksLikeComic(chapters))
+        assertTrue("但要能识别出它确实有图，好给手动入口", ComicDetect.hasImages(chapters))
+    }
+
+    @Test
+    fun `没有图的书不给漫画入口`() {
+        val chapters = listOf(Chapter("第一章", listOf("纯文字")))
+        assertFalse(ComicDetect.hasImages(chapters))
     }
 
 }

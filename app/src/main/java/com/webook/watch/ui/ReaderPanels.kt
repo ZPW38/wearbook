@@ -466,7 +466,9 @@ fun OtherPanel(
     settings: Settings,
     onMutate: (Settings.() -> Unit) -> Unit,
     onApplySystem: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    /** 切到漫画模式看图；只有"这本书有插图"时才传，否则不显示这个入口 */
+    onComic: (() -> Unit)? = null
 ) {
     settings.rev    // 订阅设置变化，改完立刻刷新
     Column(
@@ -525,6 +527,32 @@ fun OtherPanel(
             SwitchRow("  · 显示时间", settings.statusTime, "显示当前时间，看书时不用退出去看表") { onMutate { statusTime = it } }
         }
         SwitchRow("圆屏安全边距", settings.roundScreen, "圆屏手表请打开") { onMutate { roundScreen = it }; onApplySystem() }
+
+        // 漫画模式：只对"这本书里有图"的书显示。
+        // 不靠自动判断，是因为"一章一张整页图 + 两千多字"这种书到底是当漫画看还是当小说读，
+        // 只有读者自己知道 —— 给个入口让他随时切，比猜准得多。
+        if (onComic != null) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                onClick = { onClose(); onComic() },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Text(
+                        "用漫画模式看图",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        "一屏一张，点右侧翻页、双击放大",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f),
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

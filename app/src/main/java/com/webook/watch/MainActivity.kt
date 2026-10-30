@@ -77,7 +77,10 @@ import com.webook.watch.tts.Speaker
 import com.webook.watch.ui.FmEntry
 import com.webook.watch.ui.ImportScreen
 import com.webook.watch.ui.CircleSafeArea
+import com.webook.watch.ui.ComicDetect
+import com.webook.watch.ui.ComicReader
 import com.webook.watch.ui.ConfirmBox
+import com.webook.watch.ui.comicPages
 import com.webook.watch.ui.DirPickerScreen
 import com.webook.watch.ui.LibraryScreen
 import com.webook.watch.ui.ReaderScreen
@@ -141,6 +144,9 @@ class MainActivity : ComponentActivity() {
 
     /** 正在扫描目录收书 */
     private var scanning by mutableStateOf(false)
+
+    /** 漫画模式的翻页回调（表冠 / 音量键共用） */
+    private var comicTurn: ((Boolean) -> Unit)? = null
 
     /** 检测到「书架里已有同一本书的旧版本」，等用户选更新还是保留两本 */
     private var pendingUpdate by mutableStateOf<ImportOutcome.UpdateOffer?>(null)
@@ -354,6 +360,32 @@ class MainActivity : ComponentActivity() {
                                 onSettings = { screen = "settings" }
                             )
 
+                            "comic" -> current?.let { (meta, chapters) ->
+                                val pages = remember(meta.id) { comicPages(chapters) }
+                                // 恢复上次看到哪一张：先按「章 + 段」精确找，找不到就按百分比
+                                val start = remember(meta.id, pages.size) {
+                                    val p = store.allProgress()[meta.id]
+                                    when {
+                                        p == null || pages.isEmpty() -> 0
+                                        else -> pages.indexOfFirst { it.chapter == p.chapter && it.para == p.para }
+                                            .takeIf { it >= 0 }
+                                            ?: (p.frac * pages.size).toInt().coerceIn(0, pages.lastIndex)
+                                    }
+                                }
+                                ComicReader(
+                                    bookTitle = meta.title,
+                                    chapters = chapters,
+                                    bookPath = meta.source,
+                                    initialPage = start,
+                                    onProgress = { ch, para, page, total ->
+                                        saveComicProgress(meta.id, ch, para, page, total)
+                                    },
+                                    onBack = { comicTurn = null; current = null; screen = "library"; refresh() },
+                                    onSwitchToText = { comicTurn = null; screen = "reader" },
+                                    onRegisterTurn = { fn -> comicTurn = fn }
+                                )
+                            }
+
                             "reader" -> current?.let { (meta, chapters) ->
                                 val p = store.progress(meta.id)
                                 ReaderScreen(
@@ -395,6 +427,10 @@ class MainActivity : ComponentActivity() {
                                         bookmarks = store.bookmarks(meta.id)
                                     },
                                     onRegisterTurn = { fn -> readerTurn = fn },
+                                    // 只有"这本书有插图"时才给漫画模式入口
+                                    onComic = if (ComicDetect.hasImages(chapters)) {
+                                        { screen = "comic" }
+                                    } else null,
                                     onRegisterFlush = { fn -> readerFlush = fn }
                                 )
                             }
@@ -610,22 +646,26 @@ class MainActivity : ComponentActivity() {
      * 阈值 0.5 是防抖：表冠回弹时会吐一个极小的反向值，不设阈值就会翻过去又弹回来。
      */
     override fun onGenericMotionEvent(event: android.view.MotionEvent): Boolean {
-        if (event.action == android.view.MotionEvent.ACTION_SCROLL &&
-            screen == "reader" && readerTurn != null
-        ) {
-            val delta = event.getAxisValue(android.view.MotionEvent.AXIS_SCROLL)
-            if (delta > 0.5f) { readerTurn?.invoke(true); return true }
-            if (delta < -0.5f) { readerTurn?.invoke(false); return true }
+        if (event.action == android.view.MotionEvent.ACTION_SCROLL) {
+            val turn: ((Boolean) -> Unit)? =
+                if (screen == "reader") readerTurn else if (screen == "comic") comicTurn else null
+            if (turn != null) {
+                val delta = event.getAxisValue(android.view.MotionEvent.AXIS_SCROLL)
+                if (delta > 0.5f) { turn(true); return true }
+                if (delta < -0.5f) { turn(false); return true }
+            }
         }
         return super.onGenericMotionEvent(event)
     }
 
     /** 音量键翻页（在阅读页且开关打开时生效） */
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
-        if (settings.volumeKeys && screen == "reader" && readerTurn != null) {
+        val turn: ((Boolean) -> Unit)? =
+            if (screen == "reader") readerTurn else if (screen == "comic") comicTurn else null
+        if (settings.volumeKeys && turn != null) {
             when (keyCode) {
-                android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> { readerTurn?.invoke(true); return true }
-                android.view.KeyEvent.KEYCODE_VOLUME_UP -> { readerTurn?.invoke(false); return true }
+                android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> { turn(true); return true }
+                android.view.KeyEvent.KEYCODE_VOLUME_UP -> { turn(false); return true }
             }
         }
         return super.onKeyDown(keyCode, event)
@@ -635,6 +675,7 @@ class MainActivity : ComponentActivity() {
     private fun onBack() {
         when (screen) {
             "reader" -> { speaker.stop(); readerTurn = null; readerFlush = null; current = null; screen = "library"; refresh() }
+            "comic" -> { comicTurn = null; current = null; screen = "library"; refresh() }
             "import", "settings" -> { screen = "library"; refresh() }
             else -> {
                 val now = System.currentTimeMillis()
@@ -663,7 +704,8 @@ class MainActivity : ComponentActivity() {
                 if (chapters.isEmpty()) { toast("这本书没有可读内容"); return@withContext }
                 bookmarks = marks
                 current = meta to chapters
-                screen = "reader"
+                // 纯图片书（漫画）直接进漫画模式；图文混排的仍走正文阅读器
+                screen = if (ComicDetect.looksLikeComic(chapters)) "comic" else "reader"
             }
         }
     }
@@ -818,6 +860,22 @@ class MainActivity : ComponentActivity() {
         is OutOfMemoryError -> "内存不足，这本书太大了"
         is StackOverflowError -> "文件结构太复杂，解析失败"
         else -> e.message ?: e.javaClass.simpleName
+    }
+
+    /**
+     * 漫画翻页存进度。
+     * 复用同一条 Progress：chapter + para 精确指到"哪一章的第几段（那张图）"，
+     * frac 给书架显示百分比。这样从漫画切回正文模式，位置也是对的。
+     */
+    private fun saveComicProgress(id: String, chapter: Int, para: Int, page: Int, total: Int) {
+        val p = Progress(
+            chapter = chapter, page = 0, para = para, charStart = 0,
+            frac = ((page + 1f) / total.coerceAtLeast(1)).coerceIn(0f, 0.999f),
+            updatedAt = System.currentTimeMillis()
+        )
+        val m = store.allProgress().toMutableMap()
+        m[id] = p
+        store.saveProgress(m)
     }
 
     /* ---------------- 同一本书的新版本：更新 / 保留两本 ---------------- */
