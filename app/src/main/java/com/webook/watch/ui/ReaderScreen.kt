@@ -450,7 +450,13 @@ fun ReaderScreen(
                 // 命中测试：图片所在的**整行**（左右到版心边缘）再外扩 8dp 都算点中。
                 // 以前只认图片自己的那个矩形，点在图边上的留白就被当成"点了空白"，
                 // 接着走「点中间 = 开菜单」——用户看到的就是"我明明点的是图，怎么弹菜单"。
-                val tol = 8.dp.toPx()
+                // 水平和垂直分开给容差，是因为这两条边"点偏"的原因不一样：
+                // · 横向：图是居中的，宽度常小于版心，左右那点留白用户一样认为"点在图上"；
+                // · 纵向：手指在手表这么小的屏上按下去，落点比屏幕像素粗得多（实测偏 10~20dp 很常见），
+                //   8dp 的容差根本不够 —— 这就是"有时候点图却弹了菜单"的主因：
+                //   点在图上被判成点空白，于是走了「点中间 = 开关菜单」。
+                val tol = 10.dp.toPx()
+                val vTol = 26.dp.toPx()
                 fun hitImageAt(x: Float, y: Float): ImageRef? {
                     val pg = pages.getOrNull(pageIdx) ?: return null
                     return imageRectsInRange(
@@ -458,7 +464,7 @@ fun ReaderScreen(
                         lineHeightPx, 0f, paint
                     ).firstOrNull { (_, r) ->
                         x >= padX - tol && x <= padX + textW + tol &&
-                            y >= r.top - tol && y <= r.bottom + tol
+                            y >= r.top - vTol && y <= r.bottom + vTol
                     }?.first
                 }
                 detectTapGestures(
@@ -879,7 +885,9 @@ private fun ScrollBody(
             // 命中测试：图片所在整行（左右到版心边缘）+ 8dp 容差都算点中。
             // 滚动模式下要先把屏幕坐标换算到「第几块的第几行」：用可见项的偏移，
             // chunk 的起始行号就是它在全书里的行号。
-            val tol = 8.dp.toPx()
+            val tol = 10.dp.toPx()
+            // 纵向容差同样放宽（理由见上面翻页模式那段注释）
+            val vTol = 26.dp.toPx()
             fun hitImageAt(x: Float, y: Float): ImageRef? {
                 val info = scroller.layoutInfo
                 for (item in info.visibleItemsInfo) {
@@ -892,7 +900,7 @@ private fun ScrollBody(
                         lineHeightPx, paraGapPx, paint
                     ).firstOrNull { (_, rect) ->
                         x >= padX - tol && x <= padX + textW + tol &&
-                            y >= rect.top - tol && y <= rect.bottom + tol
+                            y >= rect.top - vTol && y <= rect.bottom + vTol
                     }?.first
                     if (r != null) return r
                 }
