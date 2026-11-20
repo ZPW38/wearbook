@@ -596,4 +596,86 @@ class CoreLogicTest {
         assertFalse(ComicDetect.hasImages(chapters))
     }
 
+    /* ---------------- TXT 分章（v1.8.0） ---------------- */
+
+    @Test
+    fun `中文数字与阿拉伯数字的章节头都认`() {
+        assertTrue(BookParser.isTxtHeading("第一章 起点"))
+        assertTrue(BookParser.isTxtHeading("第 12 章 归途"))
+        assertTrue(BookParser.isTxtHeading("第一百零八回 大闹天宫"))
+        assertTrue(BookParser.isTxtHeading("第二卷 风起"))
+        assertTrue(BookParser.isTxtHeading("Chapter 12"))
+        assertTrue(BookParser.isTxtHeading("12. 序章"))
+        assertTrue(BookParser.isTxtHeading("3、他的秘密"))
+    }
+
+    @Test
+    fun `正文里提到第几章不算章节头`() {
+        // 带句读标点的整句必须排除，否则正文会被劈开
+        assertFalse(BookParser.isTxtHeading("他翻开第三章，愣住了。"))
+        assertFalse(BookParser.isTxtHeading("这一点在第十二章有解释，这里不重复。"))
+        assertFalse(BookParser.isTxtHeading(""))
+        // 超长行不是标题
+        assertFalse(BookParser.isTxtHeading("第一章 " + "很长的标题".repeat(20)))
+        // 有标点的「第X章」也不是
+        assertFalse(BookParser.isTxtHeading("第一章：这是一个非常长的副标题，长到不像标题。"))
+    }
+
+    @Test
+    fun `连载 TXT 按章节标题切分而不是硬切`() {
+        val paras = mutableListOf("《测试小说》", "作者：某人")
+        for (i in 1..5) {
+            paras.add("第${i}章 标题$i")
+            repeat(30) { paras.add("这是第${i}章的第${it + 1}段正文。") }
+        }
+        val chapters = BookParser.txtChapters(paras, "测试小说")
+        // 标题前的内容单独一章 + 5 章正文
+        assertEquals(6, chapters.size)
+        // 首章沿用传入的书名（调用方给的是归一化后的书名，不含书名号）
+        assertEquals("测试小说", chapters[0].title)
+        assertEquals("第1章 标题1", chapters[1].title)
+        assertEquals("第5章 标题5", chapters[5].title)
+        assertEquals(30, chapters[1].paragraphs.size - 1) // 含标题本身
+    }
+
+    @Test
+    fun `标题紧贴正文没空行时也能认出来`() {
+        // 真实 txt 常见写法：章节标题后面直接换行跟正文，中间没有空行
+        val paras = listOf(
+            "第1章 开端\n他推开门。\n外面在下雨。",
+            "第2章 相遇\n她也在。",
+            "第3章 别离\n雨停了。"
+        )
+        val chapters = BookParser.txtChapters(paras, "测试")
+        assertEquals(3, chapters.size)
+        assertEquals("第1章 开端", chapters[0].title)
+        // 标题被剥出来，正文单独一段
+        assertFalse(chapters[0].paragraphs.first().contains('\n'))
+    }
+
+    @Test
+    fun `认不出章节头就退回按长度硬切`() {
+        // 只有 2 个标题，达不到分章门槛（≥3），不该强行分
+        val paras = listOf("第1章 开头", "正文", "第2章 结尾", "正文")
+        val chapters = BookParser.txtChapters(paras, "测试")
+        // 硬切的结果：标题会变成「测试 · 1」这种，说明没走分章路径
+        assertEquals(1, chapters.size)
+        assertTrue(chapters[0].title.startsWith("测试"))
+    }
+
+    @Test
+    fun `目录页的孤立标题被吞掉不生成空章`() {
+        val paras = mutableListOf(
+            "第1章 开端", "第2章 相遇", "第3章 别离",   // 目录：连续三行标题，没有正文
+            "第1章 开端", "这里是第一章的正文内容。",
+            "第2章 相遇", "这里是第二章的正文内容。",
+            "第3章 别离", "这里是第三章的正文内容。"
+        )
+        val chapters = BookParser.txtChapters(paras, "测试")
+        // 目录那三个孤立标题应该被吞掉，只剩正文三章
+        assertEquals(3, chapters.size)
+        assertEquals("第1章 开端", chapters[0].title)
+        assertEquals(2, chapters[0].paragraphs.size)
+    }
 }
+

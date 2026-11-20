@@ -415,7 +415,7 @@ fun TypoPanel(
         )
         SliderRow(
             "行距", settings.lineSpacingOf(dark), 1.3f, 2.2f, steps = 8,
-            fmt = { String.format("%.1f", it) },
+            fmt = { String.format(java.util.Locale.ROOT, "%.1f", it) },
             onChange = { v -> onMutate { setLineSpacingOf(dark, v) } }
         )
         Text(
@@ -586,7 +586,7 @@ fun SpeakPanel(
         }
         SliderRow(
             "朗读语速", settings.speechRate, 0.5f, 1.5f, steps = 9,
-            fmt = { String.format("%.2f 倍", it) },
+            fmt = { String.format(java.util.Locale.ROOT, "%.2f 倍", it) },
             onChange = { v -> onMutate { speechRate = v } }
         )
         SwitchRow("朗读时保持常亮", settings.keepOnSpeaking) { onMutate { keepOnSpeaking = it } }

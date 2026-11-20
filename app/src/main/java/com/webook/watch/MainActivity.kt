@@ -172,6 +172,58 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
+     * SAF 选书。
+     *
+     * ⚠️ **在 Wear OS 上这条路是死的，已用 Wear OS 5 / API 34 模拟器实测确认**：
+     * 系统把 `ACTION_OPEN_DOCUMENT` 解析到
+     * `com.google.android.wearable.frameworkpackagestubs/.Stubs$DocumentsStub`
+     * —— 一个透明的空 Activity。点了按钮既不弹选择器、也不报错、更不抛
+     * ActivityNotFoundException，界面就是原地不动（比崩溃更难排查）。
+     * `packageManager.queryIntentActivities` 查得到"有处理者"，所以**不能用它探测**；
+     * 只能用 `resolveActivity().activityInfo.name` 里是否含 "Stub" 来识别。
+     *
+     * 因此 Wear OS 上不能依赖 SAF，真正的通道是 [appBooksDir]（应用专属外部目录，
+     * 数据线/配对工具放进去即可，不需要任何权限）。
+     */
+    private val openDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult   // 用户点了返回
+        importFromUri(uri)
+    }
+
+    /**
+     * 这台设备的 SAF 选择器是不是个空壳（Wear OS 就是）。
+     * 命中就别让用户点了个寂寞 —— 直接告诉他走专属目录。
+     */
+    private fun isSafStubbed(): Boolean = runCatching {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE); type = "*/*"
+        }
+        val r = packageManager.resolveActivity(i, 0) ?: return@runCatching true   // 无人处理 = 同样不可用
+        r.activityInfo?.name?.contains("Stub", ignoreCase = true) == true
+    }.getOrDefault(true)
+
+    /**
+     * 点「从文件里选一本书」的统一入口。
+     * 选择器是空壳时立刻告知用户该走哪条路，而不是让他对着没反应的界面发呆。
+     */
+    private fun openDocumentSafely() {
+        if (isSafStubbed()) {
+            toast("这台手表没有文件选择器，请用「专属文件夹」：数据线连电脑把书放进去即可")
+            return
+        }
+        val mimes = arrayOf(
+            "application/epub+zip",
+            "application/x-mobipocket-ebook",
+            "application/vnd.amazon.ebook",
+            "text/plain",
+            "text/html",
+            "*/*"
+        )
+        runCatching { openDocument.launch(mimes) }
+            .onFailure { toast("打不开文件选择器，请改用「专属文件夹」") }
+    }
+
+    /**
      * 浏览的根目录：固定用外部存储（/sdcard）。
      * 之前会在 canRead() 为 false 时回退到应用私有目录 —— 但安卓 10 上权限还没授予时 canRead()
      * 就是 false，结果用户一进导入页就被丢进 /Android/data/... 那种空目录里，以为文件都没了。
@@ -179,7 +231,13 @@ class MainActivity : ComponentActivity() {
     private fun storageRoot(): File =
         Environment.getExternalStorageDirectory() ?: (getExternalFilesDir(null) ?: filesDir)
 
-    /** Android 11+ 的「所有文件访问」：没有它，listFiles() 只会返回音乐/图片等媒体文件 */
+    /**
+     * Android 11+ 的「所有文件访问」：没有它，listFiles() 只会返回音乐/图片等媒体文件。
+     *
+     * ⚠️ Wear OS（三星 Watch 7）**系统设置里没有这个开关**，权限页只有「读取应用列表」，
+     * 于是本函数在手表上恒为 false，内置文件管理器必然列不出 epub/txt。
+     * 这条路上限如此，别指望"引导用户去打开"能解决 —— 手表上根本没有那个开关可点。
+     */
     private fun hasAllFilesAccess(): Boolean =
         Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
 
@@ -461,7 +519,9 @@ class MainActivity : ComponentActivity() {
                                     if (dirStack.size > 1) storageBlocked = false
                                     refreshDir()
                                     if (entries.isEmpty()) toast("专属文件夹也是空的 —— 可以用数据线或 MT 管理器把书拷进去")
-                                }
+                                },
+                                // SAF：把系统支持的电子书类型都列出来，别把用户的书藏掉
+                                onOpenDocument = { openDocumentSafely() }
                             )
 
                             "pickdir" -> DirPickerScreen(
@@ -646,6 +706,10 @@ class MainActivity : ComponentActivity() {
      * 阈值 0.5 是防抖：表冠回弹时会吐一个极小的反向值，不设阈值就会翻过去又弹回来。
      */
     override fun onGenericMotionEvent(event: android.view.MotionEvent): Boolean {
+        // AXIS_SCROLL 与 ACTION_SCROLL 都是 API 26 才公开的常量，minSdk 是 24。
+        // 直接引用在 24/25 上不会崩（常量是编译期内联的 int），但那些系统的表冠
+        // 根本不发这类事件，早退掉省得做无用判断。
+        if (android.os.Build.VERSION.SDK_INT < 26) return super.onGenericMotionEvent(event)
         if (event.action == android.view.MotionEvent.ACTION_SCROLL) {
             val turn: ((Boolean) -> Unit)? =
                 if (screen == "reader") readerTurn else if (screen == "comic") comicTurn else null
@@ -677,6 +741,9 @@ class MainActivity : ComponentActivity() {
             "reader" -> { speaker.stop(); readerTurn = null; readerFlush = null; current = null; screen = "library"; refresh() }
             "comic" -> { comicTurn = null; current = null; screen = "library"; refresh() }
             "import", "settings" -> { screen = "library"; refresh() }
+            // 目录选择器是从设置页点进来的，按返回就该回设置页。
+            // 漏了这一支会掉进下面的 else，变成「再按一次退出」—— 看起来像返回键失灵。
+            "pickdir" -> { screen = "settings" }
             else -> {
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt < 2000) finish() else { lastBackAt = now; toast("再按一次退出") }
@@ -726,7 +793,15 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshDir() {
         val dir = dirStack.lastOrNull() ?: run { entries = emptyList(); storageBlocked = false; return }
-        val list = dir.listFiles() ?: emptyArray()
+        val raw = dir.listFiles()
+        val list = raw ?: emptyArray()
+        // 诊断日志：目录"看着有文件却列不出来"时，靠它区分是 listFiles 返回 null、
+        // 还是返回了空数组（前者=没权限，后者=真没文件）。release 包里也留着，成本极低。
+        android.util.Log.i(
+            "WearBook/FM",
+            "listFiles(${dir.absolutePath}) raw=${raw?.size ?: "null"} " +
+                "canRead=${dir.canRead()} exists=${dir.exists()} -> kept=${list.size}"
+        )
         entries = list
             .filter { !it.name.startsWith(".") }
             .map { FmEntry(it.name ?: "?", it.isDirectory, it, !it.isDirectory && isBookFile(it.name)) }
@@ -828,6 +903,65 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /**
+     * 从 SAF 返回的 uri 导入一本书。
+     *
+     * 要点：
+     * 1. 先用 [displayName] 还原文件名 —— uri 本身是 `content://.../1234` 这种，
+     *    拿不到扩展名就判断不了格式，书架标题也会变成一串数字。
+     * 2. 内容**必须落到我们自己的长期目录**再解析：SAF 授予的读权限只在本次进程存活期内有效，
+     *    而 epub 的插图是阅读时才回原文件按需读的，靠不住。
+     * 3. 不申请任何存储权限，也就不会有"权限被拒"的分支。
+     */
+    private fun importFromUri(uri: Uri) {
+        if (importing != null) { toast("正在导入，请稍候…"); return }
+        val name = displayName(uri) ?: "book.${extHint(uri)}"
+        val ext = name.substringAfterLast('.', "").lowercase()
+        if (ext !in SUPPORTED_EXT) {
+            toast("这个文件不是电子书（.$ext）—— 支持 TXT / EPUB / MOBI / AZW / HTML")
+            return
+        }
+        importing = name.substringBeforeLast('.')
+        lifecycleScope.launch(Dispatchers.IO) {
+            var tmp: File? = null
+            try {
+                val isEpub = ext == "epub"
+                // epub 直接落到长期目录（插图以后还要回来读）；
+                // 其它格式读进内存就完事，放缓存目录即可
+                val dir = if (isEpub) keepDir() else File(cacheDir, "saf_import").apply { mkdirs() }
+                tmp = File(dir, name)
+                contentResolver.openInputStream(uri)?.use { input ->
+                    tmp.outputStream().use { out -> input.copyTo(out) }
+                } ?: throw IllegalArgumentException("系统没给这个文件的读取权限")
+
+                if (!isEpub && tmp.length() > BookParser.MAX_IN_MEMORY_BYTES) {
+                    withContext(Dispatchers.Main) {
+                        toast("这本书 ${tmp.length() / 1048576} MB，超过上限 —— 手表内存放不下")
+                    }
+                    return@launch
+                }
+                val bytes = if (isEpub) null else tmp.readBytes()
+                val outcome = parseAndStore(name, bytes, if (isEpub) tmp else null)
+                finishImport(outcome)
+            } catch (e: Throwable) {
+                withContext(Dispatchers.Main) { toast("导入失败：${friendlyError(e)}") }
+            } finally {
+                // epub 已经在长期目录里了，别删；只有缓存里的临时文件要清
+                if (tmp?.absolutePath?.contains("saf_import") == true) runCatching { tmp?.delete() }
+                withContext(Dispatchers.Main) { importing = null }
+            }
+        }
+    }
+
+    /** 拿不到显示名时，退而求其次看 MIME，尽量别把格式判断丢光 */
+    private fun extHint(uri: Uri): String = when (contentResolver.getType(uri)) {
+        "application/epub+zip" -> "epub"
+        "application/x-mobipocket-ebook" -> "mobi"
+        "application/vnd.amazon.ebook" -> "azw3"
+        "text/html" -> "html"
+        else -> "txt"
     }
 
     private fun importFile(file: File) {

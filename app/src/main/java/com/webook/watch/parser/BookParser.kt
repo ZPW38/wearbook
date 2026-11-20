@@ -143,7 +143,110 @@ object BookParser {
         val text = decode(bytes).replace("\r\n", "\n").replace("\r", "\n")
         var paras = text.split(Regex("\n\\s*\n")).map { it.trim() }.filter { it.isNotBlank() }
         if (paras.size < 4) paras = text.split("\n").map { it.trim() }.filter { it.isNotBlank() }
-        return ParsedBook(title, "", "txt", chunk(paras, title))
+        return ParsedBook(title, "", "txt", txtChapters(paras, title))
+    }
+
+    /* ---------------- TXT 分章 ---------------- */
+
+    /** 单章超过这个字数就再切一刀（防"整本没分章 / 标题判漏"时一章几万字排不动） */
+    private const val CHAPTER_SOFT_LIMIT = 12000
+
+    /** 中文章节头：第一章 / 第 12 节 / 第三回 / 卷二 … */
+    private val TXT_HEADING_CN = Regex("^第\\s*[0-9０-９一二三四五六七八九十百千万零两]{1,12}\\s*[章节回卷部篇集话]")
+
+    /** 英文章节头：Chapter 12 */
+    private val TXT_HEADING_EN = Regex("^chapter\\s*\\d{1,5}", RegexOption.IGNORE_CASE)
+
+    /** 纯数字章节头：12. 标题 / 12、标题（只匹配序号前缀，标题部分另行校验） */
+    private val TXT_HEADING_NUM = Regex("^\\d{1,4}\\s*[.、:：]")
+
+    /**
+     * 判断某一行是不是章节标题。
+     *
+     * 刻意保守 —— 判定错了整本书的章节结构就毁了。做法是**先匹配序号前缀、
+     * 再只看前缀之后的标题部分有没有句读标点**：
+     *   - 「他翻开第三章，愣住了。」→ 不以「第」开头，正则直接不匹配；
+     *   - 「3、他的秘密」→ 前缀是「3、」，剩下的「他的秘密」干净 → 算标题；
+     *   - 「3、他的秘密有很多，他一直没说。」→ 标题部分带逗号 → 不算，是正文。
+     * ⚠️ 不能把「、」整个列进黑名单：它正是「3、标题」这种写法的分隔符本身。
+     *
+     * 纯 JVM 实现，不依赖 Android，可直接单测。
+     */
+    fun isTxtHeading(line: String): Boolean {
+        val t = line.trim()
+        if (t.isEmpty() || t.length > 40) return false
+        val m = TXT_HEADING_CN.find(t) ?: TXT_HEADING_EN.find(t) ?: TXT_HEADING_NUM.find(t)
+            ?: return false
+        if (m.range.first != 0) return false
+        // 只看「序号前缀」之后的部分：那才是书名/标题，带句读就不是标题
+        val rest = t.substring(m.range.last + 1)
+        if (rest.any { it in "。！？；，、" }) return false
+        return true
+    }
+
+    /**
+     * 段落内部首个换行如果是章节标题，就把它拆出来单独成段。
+     *
+     * 为什么需要：txtToBook 先生成段落列表，但很多 TXT 是
+     * 「第一章 起点\n正文第一行\n正文第二行」这种标题**紧贴正文**的写法，
+     * 按空行切分时标题会被粘在正文段落开头，行级判定就看不见它了。
+     */
+    private fun peelHeadings(paras: List<String>): List<String> {
+        val out = ArrayList<String>(paras.size + 8)
+        for (p in paras) {
+            val nl = p.indexOf('\n')
+            if (nl > 0 && isTxtHeading(p.substring(0, nl))) {
+                out.add(p.substring(0, nl).trim())
+                val rest = p.substring(nl + 1).trim()
+                if (rest.isNotEmpty()) out.add(rest)
+            } else {
+                out.add(p)
+            }
+        }
+        return out
+    }
+
+    /**
+     * 按章节标题把 TXT 切成章；认不出就退回按长度硬切（chunk）。
+     *
+     * 门槛是**至少 3 个**标题 —— 只认出 1~2 个说明这不是分章文本，
+     * 或者规则误伤了零散几行，这时候强行分章只会把书切得莫名其妙。
+     *
+     * 目录页也顺手处理了：目录里每行都是标题且彼此之间没有正文，
+     * 「标题后面紧跟下一个标题」的章节（body 只有标题一行）直接跳过，
+     * 于是那一串目录项全部被吞掉，正文从真正的第一章开始正常分。
+     */
+    fun txtChapters(paras: List<String>, title: String): List<Chapter> {
+        if (paras.isEmpty()) return chunk(paras, title)
+        val ps = peelHeadings(paras)
+        val heads = ps.indices.filter { isTxtHeading(ps[it]) }
+        if (heads.size < 3) return chunk(ps, title)
+
+        val out = mutableListOf<Chapter>()
+        // 第一个标题之前的内容（书名页 / 简介 / 前言）单独收一章
+        if (heads.first() > 0) {
+            val pre = ps.subList(0, heads.first())
+            if (pre.any { it.isNotBlank() }) out.add(Chapter(title, pre))
+        }
+        heads.forEachIndexed { i, start ->
+            val end = if (i + 1 < heads.size) heads[i + 1] else ps.size
+            val body = ps.subList(start, end)
+            // 只有标题没有正文 —— 这是目录项，或作者留的空章，跳过
+            if (body.size <= 1) return@forEachIndexed
+            val headTitle = body.first().trim()
+            val chars = body.sumOf { it.length }
+            if (chars > CHAPTER_SOFT_LIMIT) {
+                // 标题判漏 / 连载没分章时，单章会特别长，按软上限再切
+                val parts = chunk(body.drop(1), headTitle, CHAPTER_SOFT_LIMIT)
+                parts.forEachIndexed { k, c ->
+                    // 第一段用原标题，后续段沿用 chunk 给的「标题 · n」
+                    out.add(if (k == 0) Chapter(headTitle, c.paragraphs) else c)
+                }
+            } else {
+                out.add(Chapter(headTitle, body))
+            }
+        }
+        return out.ifEmpty { chunk(ps, title) }
     }
 
     /* ---------------- HTML 文件 ---------------- */

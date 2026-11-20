@@ -101,7 +101,7 @@ fun SettingsScreen(
             SliderRow("正文字号", fs, 14f, 26f, 1f, { v -> "${v.toInt()}px" }) {
                 fs = it; settings.fontSize = it; onChange()
             }
-            SliderRow("行距", lh, 1.3f, 2.2f, 0.1f, { v -> String.format("%.1f", v) }) {
+            SliderRow("行距", lh, 1.3f, 2.2f, 0.1f, { v -> String.format(java.util.Locale.ROOT, "%.1f", v) }) {
                 lh = it; settings.lineSpacing = it; onChange()
             }
             SwitchRow("自动翻页", auto > 0f) { on ->
@@ -122,7 +122,7 @@ fun SettingsScreen(
                     onChange()
                 }
             }
-            SliderRow("朗读速度", rate, 0.5f, 1.5f, 0.05f, { v -> String.format("%.2f 倍", v) }) {
+            SliderRow("朗读速度", rate, 0.5f, 1.5f, 0.05f, { v -> String.format(java.util.Locale.ROOT, "%.2f 倍", v) }) {
                 rate = it; settings.speechRate = it; onChange()
             }
 
