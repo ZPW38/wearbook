@@ -48,6 +48,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -81,6 +82,7 @@ import com.webook.watch.ui.CircleSafeArea
 import com.webook.watch.ui.ComicDetect
 import com.webook.watch.ui.ComicReader
 import com.webook.watch.ui.ConfirmBox
+import com.webook.watch.ui.ComicPage
 import com.webook.watch.ui.comicPages
 import com.webook.watch.ui.DirPickerScreen
 import com.webook.watch.ui.QrTransferScreen
@@ -483,9 +485,25 @@ class MainActivity : ComponentActivity() {
                             )
 
                             "comic" -> current?.let { (meta, chapters) ->
-                                val pages = remember(meta.id) { comicPages(chapters) }
+                                /*
+                                 * 漫画页序**必须在后台算**。
+                                 *
+                                 * 原来写成 `remember(meta.id) { comicPages(chapters) }` —— remember 里
+                                 * 的代码在**主线程的组合过程**中同步执行，而 comicPages 要逐段扫全书。
+                                 * 和 collectImages 是同一个坑（那边 1102 章实测 2.7 秒）。
+                                 * 真机上表现为进漫画页时 `Skipped 173 frames`（约 2.9 秒卡顿）。
+                                 */
+                                var pages by remember(meta.id) {
+                                    mutableStateOf<List<ComicPage>>(emptyList())
+                                }
+                                var pagesReady by remember(meta.id) { mutableStateOf(false) }
+                                LaunchedEffect(meta.id, chapters) {
+                                    val computed = withContext(Dispatchers.Default) { comicPages(chapters) }
+                                    pages = computed
+                                    pagesReady = true
+                                }
                                 // 恢复上次看到哪一张：先按「章 + 段」精确找，找不到就按百分比
-                                val start = remember(meta.id, pages.size) {
+                                val start = remember(meta.id, pages.size, pagesReady) {
                                     val p = store.allProgress()[meta.id]
                                     when {
                                         p == null || pages.isEmpty() -> 0
@@ -494,7 +512,12 @@ class MainActivity : ComponentActivity() {
                                             ?: (p.frac * pages.size).toInt().coerceIn(0, pages.lastIndex)
                                     }
                                 }
-                                ComicReader(
+                                if (!pagesReady) {
+                                    // 还在后台算：给个明确的等待态，而不是空白或卡死
+                                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        CircularProgressIndicator(strokeWidth = 2.dp)
+                                    }
+                                } else ComicReader(
                                     bookTitle = meta.title,
                                     chapters = chapters,
                                     bookPath = meta.source,
@@ -549,8 +572,13 @@ class MainActivity : ComponentActivity() {
                                         bookmarks = store.bookmarks(meta.id)
                                     },
                                     onRegisterTurn = { fn -> readerTurn = fn },
-                                    // 只有"这本书有插图"时才给漫画模式入口
-                                    onComic = if (ComicDetect.hasImages(chapters)) {
+                                    /*
+                                     * 只有"这本书有插图"时才给漫画模式入口。
+                                     * ⚠️ 用 remember 缓存：hasImages 是 any{} 短路扫描，
+                                     * 但对**没有插图**的书要扫完全书 —— 每次重组都跑一遍太浪费。
+                                     * key 用 meta.id，换书才重算。
+                                     */
+                                    onComic = if (remember(meta.id) { ComicDetect.hasImages(chapters) }) {
                                         { screen = "comic" }
                                     } else null,
                                     onRegisterFlush = { fn -> readerFlush = fn }
@@ -839,12 +867,20 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) {
             val chapters = store.chapters(meta.id)
             val marks = store.bookmarks(meta.id)
+            /*
+             * ⚠️ looksLikeComic 必须在 IO 线程算完再回主线程。
+             *
+             * 原来是在 withContext(Dispatchers.Main) 里面直接调用的 —— 它会遍历
+             * 前 SAMPLE 章的每一段做判定，书越大越慢。真机上打开一本书会看到
+             * `Skipped 173 frames`（约 2.9 秒），用户以为卡死了。
+             */
+            val isComic = ComicDetect.looksLikeComic(chapters)
             withContext(Dispatchers.Main) {
                 if (chapters.isEmpty()) { toast("这本书没有可读内容"); return@withContext }
                 bookmarks = marks
                 current = meta to chapters
                 // 纯图片书（漫画）直接进漫画模式；图文混排的仍走正文阅读器
-                screen = if (ComicDetect.looksLikeComic(chapters)) "comic" else "reader"
+                screen = if (isComic) "comic" else "reader"
             }
         }
     }

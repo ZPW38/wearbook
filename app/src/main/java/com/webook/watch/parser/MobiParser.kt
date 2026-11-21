@@ -16,9 +16,32 @@ object MobiParser {
         val magic = String(u, 60, 8, Charsets.US_ASCII)
         if (magic != "BOOKMOBI") throw IllegalArgumentException("不是有效的 MOBI 文件")
 
+        /*
+         * ⚠️ 记录表必须**先校验再使用**。
+         *
+         * 原来直接 `IntArray(nRec) { u32(u, 78 + i*8) }` —— nRec 是文件头里读出来的
+         * 16 位值，最大可到 65535；文件本身可能只有几十 KB，于是要么读越界、
+         * 要么后面用 offs[i] 去 copyOfRange 时越界。
+         *
+         * 模糊测试（随机字节 + 正确魔数）第一次就复现了：
+         *   ArrayIndexOutOfBoundsException: Index 1230 out of bounds for length 1226
+         * 用户遇到一个损坏或非标准的 MOBI 时，App 会直接闪退。
+         */
         val nRec = u16(u, 76)
+        if (nRec <= 0) throw IllegalArgumentException("MOBI 记录表为空")
+        // 每条记录占 8 字节（4 字节偏移 + 4 字节属性），整张表必须落在文件内
+        if (78 + nRec * 8 > u.size) {
+            throw IllegalArgumentException("MOBI 记录表越界（声明 $nRec 条，文件只有 ${u.size} 字节）")
+        }
         val offs = IntArray(nRec) { i -> u32(u, 78 + i * 8) }
+        // 每个偏移都要落在文件内，且递增（MOBI 的记录表天然有序）
+        for (i in 0 until nRec) {
+            if (offs[i] < 0 || offs[i] >= u.size) {
+                throw IllegalArgumentException("MOBI 记录 $i 的偏移 ${offs[i]} 超出文件范围")
+            }
+        }
         val r0 = offs[0]
+        if (r0 + 12 > u.size) throw IllegalArgumentException("MOBI 记录 0 头部不完整")
         val compression = u16(u, r0)
         val textLen = u32(u, r0 + 4)
         val recCount = u16(u, r0 + 8)
@@ -29,9 +52,14 @@ object MobiParser {
         for (i in 1..recCount.coerceAtMost(nRec - 1)) {
             val start = offs[i]
             val end = if (i + 1 < nRec) offs[i + 1] else u.size
-            if (end <= start) continue
+            // 偏移可能乱序（损坏文件），这里再兜一层，别让 copyOfRange 抛越界
+            if (start < 0 || end > u.size || end <= start) continue
             val rec = u.copyOfRange(start, end)
-            parts.add(if (compression == 2) PalmDoc.decompress(rec) else rec)
+            // 解压也可能因损坏数据抛异常 —— 单条坏记录不该让整本书打不开，跳过它继续
+            val decoded = if (compression == 2) {
+                runCatching { PalmDoc.decompress(rec) }.getOrNull()
+            } else rec
+            if (decoded != null) parts.add(decoded)
         }
         var textBytes = ByteArray(parts.sumOf { it.size })
         var pos = 0

@@ -706,4 +706,95 @@ class CoreLogicTest {
         assertTrue("不能返回空文件名", n.isNotEmpty())
         assertFalse("兜底名不能含路径分隔符", n.contains('/'))
     }
+    /* ---------------- 解析器鲁棒性（模糊输入不该崩） ---------------- */
+
+    @Test
+    fun `损坏的 MOBI 头应抛明确异常而不是崩溃`() {
+        // 太短
+        runCatching { MobiParser.parse(ByteArray(10), "x.mobi") }
+            .onSuccess { throw AssertionError("10 字节不该解析成功") }
+        // 长度够但没有 BOOKMOBI 魔数
+        val junk = ByteArray(200) { it.toByte() }
+        runCatching { MobiParser.parse(junk, "x.mobi") }
+            .onSuccess { throw AssertionError("无魔数不该解析成功") }
+    }
+
+    @Test
+    fun `随机字节喂给 MOBI 解析器不会抛非预期异常`() {
+        val rnd = java.util.Random(42)
+        repeat(500) {
+            val n = 96 + rnd.nextInt(2000)
+            val bytes = ByteArray(n).also { rnd.nextBytes(it) }
+            // 塞入正确魔数，强制走到更深的分支
+            "BOOKMOBI".toByteArray().copyInto(bytes, 60)
+            try {
+                MobiParser.parse(bytes, "fuzz.mobi")
+            } catch (e: IllegalArgumentException) {
+                // 预期：明确拒绝
+            } catch (e: Throwable) {
+                throw AssertionError("第 $it 次模糊输入抛了非预期异常: ${e.javaClass.simpleName}: ${e.message}", e)
+            }
+        }
+    }
+
+    @Test
+    fun `空输入与极端长度的 TXT 分章不崩`() {
+        assertEquals(1, BookParser.txtChapters(emptyList(), "空").size)
+        assertEquals(1, BookParser.txtChapters(listOf(""), "空行").size)
+        // 全是章节标题、没有正文
+        val onlyHeads = (1..10).map { "第${it}章 标题" }
+        val c = BookParser.txtChapters(onlyHeads, "全标题")
+        assertTrue("全是孤立标题时应该退回硬切，不该返回空列表", c.isNotEmpty())
+    }
+
+    @Test
+    fun `超长单行不会让分章卡死`() {
+        val huge = "第1章 开头" + "字".repeat(200_000)
+        val c = BookParser.txtChapters(listOf(huge), "超长")
+        assertTrue("超长段落应被切开", c.isNotEmpty())
+    }
+    @Test
+    fun `随机字节喂给 EPUB 解析器不会崩`() {
+        val rnd = java.util.Random(7)
+        val tmp = java.io.File.createTempFile("fuzz", ".epub")
+        try {
+            repeat(30) {
+                val n = 100 + rnd.nextInt(3000)
+                tmp.writeBytes(ByteArray(n).also { b -> rnd.nextBytes(b) })
+                try {
+                    BookParser.epubToBook(tmp, "fuzz.epub")
+                } catch (e: IllegalArgumentException) {
+                    // 预期
+                } catch (e: java.util.zip.ZipException) {
+                    // 预期：不是 zip
+                } catch (e: Throwable) {
+                    throw AssertionError("第 $it 次 EPUB 模糊输入抛了非预期异常: ${e.javaClass.simpleName}: ${e.message}", e)
+                }
+            }
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    @Test
+    fun `极端 HTML 输入不崩`() {
+        val cases = listOf(
+            "",
+            "<html></html>",
+            "<html><body></body></html>",
+            "<html><body><img src='x.png'></body></html>",
+            "<p>没有闭合",
+            "<html><body>" + "<div>".repeat(5000) + "</body></html>",
+            "<html><body>" + "字".repeat(100000) + "</body></html>"
+        )
+        for ((i, html) in cases.withIndex()) {
+            try {
+                BookParser.htmlToBook(html.toByteArray(), "t$i.html")
+            } catch (e: IllegalArgumentException) {
+                // 预期：明确拒绝空内容
+            } catch (e: Throwable) {
+                throw AssertionError("第 $i 个 HTML 用例抛了非预期异常: ${e.javaClass.simpleName}: ${e.message}", e)
+            }
+        }
+    }
 }
