@@ -1,6 +1,7 @@
 package com.webook.watch.data
 
 import android.content.Context
+import com.webook.watch.BuildConfig
 
 /**
  * 应用版本号的运行时读取。
@@ -13,16 +14,30 @@ import android.content.Context
  */
 object AppVersion {
 
-    /** 形如 `WearBook/1.1.0 (Android 10)`；拿不到版本号时退化成 `WearBook (Android)` */
+    /**
+     * 构建号（内部迭代号），由 `build-number.txt` 在构建时自增，见 app/build.gradle.kts。
+     *
+     * 与 versionName（发布号）分开：发一个版本可能要构建十几次，
+     * 用户报问题时「1.9.2 (build 2103)」能精确对应到某一次构建，
+     * 只说「1.9.2」则无法区分。
+     */
+    fun buildNumber(): Int = runCatching { BuildConfig.BUILD_NUMBER }.getOrDefault(0)
+
+    /**
+     * 形如 `WearBook/1.1.0 (Android 10)`；
+     * 带构建号时形如 `WearBook/1.1.0+2103 (Android 10)`（+ 是 semver 的构建元数据写法）。
+     */
     fun userAgent(ctx: Context): String {
         val name = runCatching {
             @Suppress("DEPRECATION")
             ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
         }.getOrNull()?.takeIf { it.isNotBlank() }
         val os = runCatching { android.os.Build.VERSION.RELEASE }.getOrNull()?.takeIf { it.isNotBlank() }
+        val build = buildNumber()
         return buildString {
             append("WearBook")
             if (name != null) append("/").append(name)
+            if (build > 0) append("+").append(build)
             append(" (Android")
             if (os != null) append(" ").append(os)
             append(")")

@@ -23,3 +23,6 @@ local.properties
 
 # ---- 日志 ----
 *.log
+
+# ---- 构建号的原子写临时文件（构建被中断时会留下）----
+build-number.txt.tmp

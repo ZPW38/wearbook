@@ -408,6 +408,9 @@ fun SearchPanel(
 fun TypoPanel(
     settings: Settings,
     dark: Boolean,
+    /** 当前亮度：< 0 表示跟随系统 */
+    brightness: Float,
+    onBrightnessChange: (Float, Boolean) -> Unit,
     onMutate: (Settings.() -> Unit) -> Unit,
     onClose: () -> Unit
 ) {
@@ -444,6 +447,29 @@ fun TypoPanel(
             fmt = { String.format(java.util.Locale.ROOT, "%.1f", it) },
             onChange = { v -> onMutate { setLineSpacingOf(dark, v) } }
         )
+        /*
+         * 屏幕亮度。
+         *
+         * 这个控件在 v1.2.0 被删掉之后**一直没恢复**，但 Settings.brightness /
+         * applyBrightness / ReaderMenu 的参数却全留着 —— 结果是：夜里想调暗一点，
+         * 界面上根本找不到入口，而代码里躺着一堆死参数和"从未被读取"的 showBrightness。
+         *
+         * 用 -1 表示"跟随系统"（WindowManager.BRIGHTNESS_OVERRIDE_NONE）。
+         * 下限 0.05 而不是 0：全黑等于把屏幕关掉，用户会以为设备坏了。
+         */
+        SliderRow(
+            "屏幕亮度",
+            if (brightness < 0f) 1f else brightness.coerceIn(0.05f, 1f),
+            0.05f, 1f, steps = 9,
+            fmt = { v ->
+                if (brightness < 0f) "跟随系统" else "${Math.round(v * 100)}%"
+            },
+            onChange = { v -> onBrightnessChange(v, false) }
+        )
+        SwitchRow(
+            "亮度跟随系统", brightness < 0f,
+            "打开后不再覆盖系统亮度"
+        ) { follow -> onBrightnessChange(if (follow) -1f else 0.85f, follow) }
         Text(
             "背景（${if (dark) "夜间" else "日间"}）",
             style = MaterialTheme.typography.labelSmall,

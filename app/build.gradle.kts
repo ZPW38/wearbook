@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -31,6 +33,36 @@ val releaseStorePass: String? = System.getenv("WEARBOOK_STORE_PASS")
         ?.trim('\uFEFF', '\u0000', ' ', '\t', '\r', '\n')
         ?.takeIf { it.isNotBlank() }
 
+/**
+ * 读取并**自增**构建号（build-number.txt），返回本次构建使用的号。
+ *
+ * ⚠️ 必须缓存：这个函数在 defaultConfig 里会被调用两次（versionCode 和
+ * buildConfigField）。如果不缓存，同一次构建里 versionCode 与 BuildConfig.BUILD_NUMBER
+ * 会差 1，用户看到的号和系统判断升级用的号对不上。
+ *
+ * 设计取舍：
+ *   - 文件不存在时从 1 开始，不会崩（新克隆仓库也能构建）；
+ *   - 写入用原子替换（先写 .tmp 再 rename），避免构建被中断时留下半个文件；
+ *   - 只在**真正构建时**递增。`gradle tasks` 这类配置阶段也会执行它 ——
+ *     这是 Gradle 的固有行为，代价是偶尔多跳几个号。号断了不影响正确性，
+ *     只要保证单调递增即可（versionCode 的唯一要求）。
+ */
+var cachedBuildNumber: Int? = null
+
+fun readBuildNumber(): Int {
+    cachedBuildNumber?.let { return it }
+    val f = File(rootDir, "build-number.txt")
+    val prev = f.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() ?: 0
+    val next = prev + 1
+    // 原子写：先落 .tmp 再替换，防止中断留下空文件导致下次从 1 重新开始
+    val tmp = File(rootDir, "build-number.txt.tmp")
+    tmp.writeText("$next\n")
+    if (f.exists()) f.delete()
+    tmp.renameTo(f)
+    cachedBuildNumber = next
+    return next
+}
+
 android {
     namespace = "com.webook.watch"
     compileSdk = 34
@@ -39,13 +71,37 @@ android {
         applicationId = "com.webook.watch"
         minSdk = 24          // 覆盖绝大多数安卓手表（普通手机也能装）
         targetSdk = 34
-        // 版本号规则见 VERSIONING.md：三段式语义化版本 major.minor.patch。
-        // versionName 是**唯一的版本号来源**，别处（README / CHANGELOG / User-Agent）都不许硬编码。
-        // versionCode 必须单调递增才能覆盖安装，这里按 1000×major + 10×minor + patch + 1000 推，
-        // 免得纯靠人手记（1.1.0 -> 2010）。
-        versionCode = 2091
-        versionName = "1.9.1"
+
+        /*
+         * ============ 版本号：双轨制 ============
+         *
+         * 【发布号】versionName —— 给人看的语义化版本（1.9.2），对应 VERSIONING.md 的规则。
+         *   只有在**对外发版**时才改它。设置页显示、User-Agent、git tag 都用这个。
+         *
+         * 【构建号】versionCode —— 给安卓系统看的，必须单调递增才能覆盖安装。
+         *   现在由 `build-number.txt` 自动维护：每次构建 +1，不需要人记。
+         *
+         * 为什么要拆开（以前是一个数，两个职责）：
+         *   1. 想给用户发 1.9.2，但自己要先跑几个内部包试（1.9.2-rc1/rc2），
+         *      versionName 只能写一个值，写哪个都别扭；
+         *   2. versionCode 靠「1000×major + 10×minor + patch + 1000」推算，
+         *      实际已经漂了（1.2.0 是 2012、1.2.1 却是 2013，1.3.0 又跳回 2020），
+         *      公式和事实对不上，人算容易错；
+         *   3. 用户问「我这是什么版本」时，需要能同时看到"发布版本"和"这次构建"。
+         *
+         * 现在的规则：
+         *   - versionName 手写，只在发版时改；
+         *   - versionCode 自动 +1，保证永远递增、永不重复；
+         *   - 构建号也写进 APK（见 buildConfigField），设置页显示成「1.9.2 (build 2103)」。
+         *
+         * ⚠️ build-number.txt 必须提交进仓库，否则换机器构建会从旧号重来，
+         *    导致 versionCode 回退 → 安卓拒绝安装「版本低于已安装版本」。
+         */
+        versionName = "1.9.2"
+        versionCode = readBuildNumber()
         resourceConfigurations += listOf("zh", "en")
+        // 构建号也塞进 BuildConfig，界面和 User-Agent 都能读到
+        buildConfigField("int", "BUILD_NUMBER", readBuildNumber().toString())
         // 手表几乎都是 ARM：出 32 位（armeabi-v7a）并兼容 64 位（arm64-v8a）。
         // x86_64 是为**官方安卓模拟器**留的：模拟器镜像是 x86_64，只有带上它才能在
         // 320×360 / Android 10 的手表规格虚拟设备上装包、跑自动化测试（截图为证）。
@@ -88,7 +144,9 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    buildFeatures { compose = true }
+    // buildConfig 必须显式打开：AGP 8 起默认关闭（官方为了加快构建）。
+    // 我们要用 BuildConfig.BUILD_NUMBER 把构建号带进 APK。
+    buildFeatures { compose = true; buildConfig = true }
 }
 
 dependencies {

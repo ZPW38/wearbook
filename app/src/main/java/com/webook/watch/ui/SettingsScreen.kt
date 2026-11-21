@@ -461,7 +461,8 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        "版本 ${AppVersion.display(ctx)}",
+                        // 同时显示发布号与构建号：用户报问题时报全串，能精确对应到某一次构建
+                        "版本 ${AppVersion.display(ctx)} · 构建 ${AppVersion.buildNumber()}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 2.dp)

@@ -627,7 +627,6 @@ fun ReaderScreen(
                 pageCount = pages.size,
                 speaking = speaking,
                 autoSeconds = settings.autoSeconds,
-                brightness = settings.brightness,
                 round = settings.roundScreen,
                 onBack = onBack,
                 onOpenToc = { panel = Panel.TOC },
@@ -663,10 +662,6 @@ fun ReaderScreen(
                 onSpeakSettings = { panel = Panel.SPEAK },
                 onTypo = { panel = Panel.TYPO },
                 onOther = { panel = Panel.OTHER },
-                onBrightnessChange = { v, follow ->
-                    onMutate { brightness = if (follow) -1f else v }
-                    onBrightness(if (follow) -1f else v)
-                },
                 onDismiss = { showOverlay = false },
                 onTip = { tip = it },
                 bgColor = Color(bg.bg),
@@ -771,7 +766,15 @@ fun ReaderScreen(
                 onClose = { panel = Panel.NONE }
             )
             Panel.TYPO -> PanelShell("排版设置（界面）", onClose = { panel = Panel.NONE }) {
-                TypoPanel(settings = settings, dark = dark, onMutate = onMutate, onClose = { panel = Panel.NONE })
+                TypoPanel(
+                    settings = settings, dark = dark,
+                    brightness = settings.brightness,
+                    onBrightnessChange = { v, follow ->
+                        onMutate { brightness = if (follow) -1f else v }
+                        onBrightness(if (follow) -1f else v)
+                    },
+                    onMutate = onMutate, onClose = { panel = Panel.NONE }
+                )
             }
             Panel.OTHER -> PanelShell("其它设置", onClose = { panel = Panel.NONE }) {
                 OtherPanel(
@@ -1056,7 +1059,6 @@ private fun ReaderOverlay(
     pageCount: Int,
     speaking: Boolean,
     autoSeconds: Int,
-    brightness: Float,
     /** 圆屏手表：标题居中、图标让位给文字 */
     round: Boolean,
     onBack: () -> Unit,
@@ -1071,7 +1073,6 @@ private fun ReaderOverlay(
     onSpeakSettings: () -> Unit,
     onTypo: () -> Unit,
     onOther: () -> Unit,
-    onBrightnessChange: (Float, Boolean) -> Unit,
     onDismiss: () -> Unit,
     onTip: (String) -> Unit,
     bgColor: Color,

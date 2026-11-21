@@ -20,16 +20,41 @@
 
 一次改动里既有功能又有修复，按**最高的那一位**算（功能 > 修复），别拆成两个版本号发。
 
-## 版本号与 versionCode 的关系
+## 两个版本号：发布号 与 构建号
 
-Android 的 `versionCode` 必须是**单调递增的整数**，系统靠它判断能不能覆盖安装；`versionName` 才是给人看的版本号。
+从 v1.9.2 起拆成双轨制，各管一件事：
 
-- 规则：**每次发版 `versionCode` 一定 +1**，无论版本号三位里是哪一位变了；
-- 现有约定：`versionCode = 1000 × major + 10 × minor + patch + 1000`，只是让它继续单调递增而已；
-- 两者**不要**靠人力对齐，从 `versionName` 推不出来就以"上次 + 1"为准。
+| | 叫什么 | 在哪 | 谁用 | 什么时候变 |
+|---|---|---|---|---|
+| **发布号** | `versionName`，形如 `1.9.2` | `app/build.gradle.kts` 手写 | 用户、设置页、User-Agent、git tag | **只在对外发版时**改 |
+| **构建号** | `versionCode` / `BuildConfig.BUILD_NUMBER`，形如 `2093` | `build-number.txt`，构建时自动 +1 | 安卓系统判升级、用户报问题 | **每次构建**自动变 |
+
+### 为什么拆开
+
+以前只有 `versionName` 一个号，它同时承担"对外发布"和"内部迭代"两个职责，于是：
+
+1. 想给用户发 `1.9.2`，但自己要先跑几个内部包试 —— `versionName` 只能写一个值，写哪个都别扭；
+2. 用户问"我这是什么版本"，说不清是正式版还是某个中间构建；
+3. `versionCode` 靠公式 `1000×major + 10×minor + patch + 1000` 推算，实际早就漂了
+   （1.2.0 是 2012、1.2.1 却是 2013、1.3.0 又跳回 2020），公式和事实对不上。
+
+### 现在的规则
+
+- `versionName` **手写**，只在发版时改；没发版就不动它，可以连续构建很多次都是 `1.9.2`。
+- `versionCode` **自动**维护：`build-number.txt` 里存当前号，每次构建读出来 +1 并写回。
+- 同一��构建里 `versionCode` 与 `BuildConfig.BUILD_NUMBER` **保证一致**（build.gradle.kts 里做了缓存，
+  避免这个函数被调用两次而加两次号）。
+- 设置页显示成 `版本 1.9.2 · 构建 2093`；User-Agent 用 semver 的构建元数据写法
+  `WearBook/1.9.2+2093 (Android 10)`。
+
+> ⚠️ **`build-number.txt` 必须提交进仓库**。它是 versionCode 的唯一来源，
+> 换机器构建时若从旧号重来，会导致 versionCode 回退 → 安卓拒绝安装
+> （报「版本低于已安装版本」）。
+>
+> ⚠️ 构建号偶尔会**跳号**（Gradle 在配置阶段也会执行读取逻辑，比如 `gradle tasks`）。
+> 这不影响正确性 —— versionCode 的唯一要求是单调递增，不要求连续。
 
 > 1.1.0 之前的历史版本（`1.0.0` ~ `1.0.28`）沿用旧的单一递增编号，**不回溯改写**。
-> `1.1.0` 是采用本规则的第一个版本。
 
 ## 单一事实来源
 
@@ -43,8 +68,9 @@ Android 的 `versionCode` 必须是**单调递增的整数**，系统靠它判�
 
 ## 发版清单
 
-1. 改 `app/build.gradle.kts`：`versionName` + `versionCode`
+1. **只改** `app/build.gradle.kts` 的 `versionName`（构建号自动递增，别手改）
 2. 更新 `README.md` 里的最新版本号与 APK 文件名
 3. 在 `CHANGELOG.md` 顶部加本次条目（按 major/minor/patch 归类写「新增 / 修复 / 变更」）
-4. 构建、签名、验证 v1+v2
-5. 提交、打 tag（`git tag -a`，轻量标签 GitHub 会拒收）
+4. 构建、签名、验证 v1+v2；确认设置页显示的「构建 N」与 `build-number.txt` 一致
+5. 提交 `build-number.txt`（**别漏**，它是 versionCode 的来源）
+6. 打 tag（`git tag -a v1.9.2`，轻量标签 GitHub 会拒收）
