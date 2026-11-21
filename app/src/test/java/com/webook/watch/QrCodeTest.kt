@@ -99,4 +99,48 @@ class QrCodeTest {
         f.writeText(out.toString())
         assertTrue(f.length() > 100)
     }
+    /**
+     * 全长度扫描（v1~v3）：1~42 字节每个长度都导出一个矩阵，
+     * 交给 tools/verify-qr.py 用 zxing 解码核对。
+     *
+     * 只测 4 个固定地址覆盖面太窄 —— QR 的版本选择、块结构、纠错码字数都随长度变化，
+     * 某一档写错只有那个长度会坏。这次就是靠全长度扫描发现 v4+ 编码有缺陷的
+     * （见 QrCode.MAX_SAFE_VERSION 的说明）。
+     */
+    @Test
+    fun `导出全长度矩阵供外部解码器校验`() {
+        val out = StringBuilder()
+        var count = 0
+        // 42 字节是 v3 的容量上限。注意 url = "h" + body 会多 1 字节，
+        // 所以 body 最多 41 —— 循环写成 1..41 才是真的覆盖到 42 字节。
+        for (len in 1..41) {
+            val body = (0 until len).map { ('a' + it % 26) }.joinToString("")
+            val url = "h" + body
+            val m = QrCode.encode(url) ?: continue
+            out.append("URL\t").append(url).append("\tSIZE\t").append(m.size).append("\n")
+            for (y in 0 until m.size) {
+                for (x in 0 until m.size) out.append(if (m.dark(x, y)) '1' else '0')
+                out.append('\n')
+            }
+            count++
+        }
+        val f = File("build/qr-dump-full.txt")
+        f.parentFile?.mkdirs()
+        f.writeText(out.toString())
+        assertEquals("1~42 字节应该全部能编码（body 1~41 + 前缀 h）", 41, count)
+    }
+
+    /**
+     * 超过 v3 容量的内容必须**明确返回 null**，而不是生成一个扫不出来的码。
+     * 调用方（QrTransferScreen）拿到 null 会退化成显示文字地址。
+     */
+    @Test
+    fun `超出安全版本的内容返回 null`() {
+        val tooLong = "http://" + "a".repeat(60)     // 67 字节，超过 v3 的 42
+        assertEquals(null, QrCode.encode(tooLong))
+        // 42 字节刚好还能编（v3 上限）
+        assertNotNull(QrCode.encode("a".repeat(42)))
+        // 43 字节就该拒绝
+        assertEquals(null, QrCode.encode("a".repeat(43)))
+    }
 }

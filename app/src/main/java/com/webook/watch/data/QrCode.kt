@@ -45,8 +45,24 @@ object QrCode {
         14, 26, 42, 62, 84, 106, 122, 152, 180, 213
     )
 
+    /**
+     * 能用到的最高版本。
+     *
+     * ⚠️ **限制在 v3（容量 42 字节）是有原因的**：v4 及以上版本的编码还有缺陷 ——
+     * v4 起数据块被拆成多块、列对要跨过第 6 列 timing 图案，这部分实测仍会生成
+     * 扫不出来的码（v1~v3 经 zxing 全长度验证正确）。
+     *
+     * 而实际用途只是把局域网地址画成二维码：`http://192.168.100.200:18899` 也才 29 字符，
+     * 永远落在 v3 以内。与其冒风险支持用不到的长内容，不如**明确拒绝**，
+     * 让调用方走"显示文字地址"的兜底，而不是生成一个看着像码、扫不出来的东西。
+     *
+     * 要放开这个限制，得先把 v4+ 的块交织与列对跳过逻辑修对，
+     * 并用 `tools/verify-qr.py` 的全长度扫描验证通过。
+     */
+    private const val MAX_SAFE_VERSION = 3
+
     private fun pickVersion(byteLen: Int): Int? {
-        for (v in 1..10) if (byteLen <= CAPACITY_M[v]) return v
+        for (v in 1..MAX_SAFE_VERSION) if (byteLen <= CAPACITY_M[v]) return v
         return null
     }
 
@@ -280,11 +296,27 @@ object QrCode {
         var right = size - 1
         var upward = true
         while (right >= 1) {
-            if (right == 6) right--   // 跳过 timing 列
+            /*
+             * 跳过第 6 列（竖向 timing 图案所在列）。
+             *
+             * 标准做法：列对按 (right, right-1) 从右往左取；
+             * 当 right 走到 6 时，**把 right 直接置为 5**，让这一对变成 (5,4)，
+             * 之后照常 -2 → (3,2) → (1,0)。
+             *
+             * ⚠️ 原来写成 `if (right == 6) right--`，得到 5 之后**又执行了一次 -2**，
+             * 下一轮变成 3，于是序列是 …,8,5,3,1 —— 第 4 列和第 0 列永远轮不到。
+             * v1~v3 的 right 序列根本走不到 6 以下，所以只有 v4 及以上才坏：
+             * 表现就是"短地址能扫，长一点的扫不出来"。
+             *
+             * 关键点：**跳列的那次赋值之后，仍然要执行一次 -2**，
+             * 因为 (5,4) 这一对本身已经消费掉了 5 和 4 两列。
+             */
+            if (right == 6) right = 5
             for (vert in 0 until size) {
                 val y = if (upward) size - 1 - vert else vert
                 for (dx in 0..1) {
                     val x = right - dx
+                    if (x < 0 || x >= size) continue
                     if (reserved[y * size + x]) continue
                     val bit = if (bitIdx < totalBits) {
                         (codewords[bitIdx / 8] ushr (7 - bitIdx % 8)) and 1 == 1

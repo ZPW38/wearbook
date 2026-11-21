@@ -135,8 +135,19 @@ object WifiTransfer {
 
                 else -> respondText(sock, "404 Not Found", "只支持上传")
             }
-        } catch (_: Throwable) {
-            // 单个请求失败不影响服务继续跑（浏览器取消、超时都很常见）
+        } catch (e: Throwable) {
+            // 单个请求失败不影响服务继续跑（浏览器取消、超时都很常见）。
+            // ⚠️ 但要**记日志**：之前这里是完全静默的 catch，上传出问题时
+            // 浏览器那头只看到转圈/失败，logcat 里一个字都没有，根本没法排查。
+            // 取消/超时属正常噪音，压到 debug；其余按 warn 记。
+            val benign = e is java.io.InterruptedIOException ||
+                e is java.net.SocketTimeoutException ||
+                e is java.net.SocketException
+            if (benign) {
+                android.util.Log.d("WearBook/WIFI", "request aborted: ${e.javaClass.simpleName}")
+            } else {
+                android.util.Log.w("WearBook/WIFI", "request failed", e)
+            }
         } finally {
             runCatching { sock.close() }
         }
