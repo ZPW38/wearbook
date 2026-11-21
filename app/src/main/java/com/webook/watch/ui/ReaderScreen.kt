@@ -98,6 +98,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 
 /** 阅读页可能打开的面板 */
 private enum class Panel { NONE, TOC, SEARCH, TYPO, OTHER, SPEAK }
@@ -178,6 +179,8 @@ fun ReaderScreen(
     var tip by remember { mutableStateOf(if (settings.readerTipsShown) null else FIRST_TIP) }
     var searching by remember { mutableStateOf(false) }
     var hits by remember { mutableStateOf(listOf<SearchHit>()) }
+    /** 搜索任务的失效标记：换关键词时自增，旧任务看到不一致就自行退出 */
+    var searchToken by remember { mutableStateOf(0) }
 
     /** 待定位：章节跳转后要落到哪一页（para=按段落找，page=直接页码） */
     var pendingPara by remember { mutableStateOf<Int?>(null) }
@@ -697,10 +700,23 @@ fun ReaderScreen(
                 onQuery = { q ->
                     if (q.isBlank()) { hits = emptyList() } else {
                         searching = true
+                        hits = emptyList()
+                        // ⚠️ 原来的实现是「一次遍历全部章节、遍历完才把结果抛回主线程」。
+                        // 实测 1102 章的书要卡 5 秒左右，期间界面冻住、没有任何反馈，
+                        // 用户以为没搜到，会反复点搜索。
+                        // 现在：**一边找一边吐结果**（每 24 章让出一次线程），
+                        // 用户几毫秒内就能看到第一批命中，而且能边看边滚。
+                        // 同时用 searchToken 做失效控制：换了关键词就把旧任务丢掉，
+                        // 避免旧结果覆盖新结果（快速改词时很容易发生）。
+                        searchToken++
+                        val myToken = searchToken
                         scope.launch(Dispatchers.Default) {
                             val out = ArrayList<SearchHit>()
+                            var lastPush = 0L
+                            var segCount = 0
                             loop@ for (ci in chapters.indices) {
                                 val ch = chapters[ci]
+                                segCount += ch.paragraphs.size
                                 for (pi in ch.paragraphs.indices) {
                                     val p = ch.paragraphs[pi]
                                     if (parseImagePara(p) != null) continue   // 插图段落没有可搜的文字
@@ -717,8 +733,28 @@ fun ReaderScreen(
                                         if (out.size >= 200) break@loop
                                     }
                                 }
+                                // 每 24 章（或积压够多段落）让出一次：既让主线程能刷新结果，
+                                // 也能及时响应"用户改了关键词"的取消请求。
+                                // 光按章数判断不够 —— 一章可能有上千段（那本 1102 章的书每章 53 页），
+                                // 单章就能卡住几十毫秒，所以再按段落数兜一层。
+                                if (ci % 24 == 23 || segCount > 4000) {
+                                    segCount = 0
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastPush > 120 || ci == chapters.size - 1) {
+                                        lastPush = now
+                                        val snapshot = ArrayList(out)
+                                        withContext(Dispatchers.Main) {
+                                            if (myToken == searchToken) hits = snapshot
+                                        }
+                                        yield()
+                                        if (myToken != searchToken) return@launch
+                                    }
+                                }
                             }
-                            withContext(Dispatchers.Main) { hits = out; searching = false }
+                            val finalList = ArrayList(out)
+                            withContext(Dispatchers.Main) {
+                                if (myToken == searchToken) { hits = finalList; searching = false }
+                            }
                         }
                     }
                 },

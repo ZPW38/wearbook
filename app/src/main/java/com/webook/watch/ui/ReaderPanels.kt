@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -232,7 +233,23 @@ fun TocPanel(
         }
     ) {
         if (tab == 0) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 12.dp)) {
+            // 打开目录时直接停在**当前章**，而不是从头开始翻。
+            // 连载几百章的书，每次都要滑过前面几百条才能到正在读的地方，实际上没法用。
+            // 往上留 1 条：让用户还能看到上一章，方便往回跳。
+            // key 用章节数：换书时（列表长度变了）重建状态，避免停在上本书的位置。
+            val listState = rememberLazyListState(
+                initialFirstVisibleItemIndex = (chapterIdx - 1).coerceAtLeast(0)
+            )
+            // 同一本书里切到别的章再打开目录，也要跳到新位置（rememberLazyListState 只在首次生效）
+            LaunchedEffect(chapterIdx) {
+                val target = (chapterIdx - 1).coerceAtLeast(0)
+                if (listState.firstVisibleItemIndex != target) listState.scrollToItem(target)
+            }
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                state = listState,
+                contentPadding = PaddingValues(bottom = 12.dp)
+            ) {
                 itemsIndexed(chapters) { i, c ->
                     val cur = i == chapterIdx
                     Surface(

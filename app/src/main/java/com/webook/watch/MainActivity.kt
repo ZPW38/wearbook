@@ -211,8 +211,42 @@ class MainActivity : ComponentActivity() {
     }.getOrDefault(true)
 
     /**
-     * 点「从文件里选一本书」的统一入口。
-     * 选择器是空壳时立刻告知用户该走哪条路，而不是让他对着没反应的界面发呆。
+     * 点「从设备导入」的统一入口：**先试系统选择器，不行就自动落到专属文件夹**。
+     *
+     * 之前是「先弹一句提示让用户自己再去点另一个图标」—— 用户凭什么知道该点哪个？
+     * 多一次来回、多一次困惑。现在直接替他把路走通：
+     *   - 手机 / 正常设备：SAF 好用，直接开选择器；
+     *   - Wear OS（选择器是空壳）：识别出来就直接进专属文件夹，并把地址亮在屏幕上。
+     */
+    private fun openImportLocal() {
+        if (isSafStubbed()) {
+            openAppDir()
+            toast("这台手表没有文件选择器，已打开专属文件夹 —— 把书放进去即可")
+            return
+        }
+        val mimes = arrayOf(
+            "application/epub+zip",
+            "application/x-mobipocket-ebook",
+            "application/vnd.amazon.ebook",
+            "text/plain",
+            "text/html",
+            "*/*"
+        )
+        runCatching { openDocument.launch(mimes) }
+            .onFailure { openAppDir() }
+    }
+
+    /** 打开专属文件夹（数据线放书的通道），内部目录直接可读，不需要权限 */
+    private fun openAppDir() {
+        val d = appBooksDir()
+        if (dirStack.lastOrNull()?.absolutePath != d.absolutePath) dirStack.add(d)
+        if (dirStack.size > 1) storageBlocked = false
+        refreshDir()
+        if (entries.isEmpty()) toast("专属文件夹是空的 —— 用数据线或手机端工具把书放进去")
+    }
+
+    /**
+     * 点旧版「从系统文件选书」时的行为，保留给外部调用（现在主入口走 [openImportLocal]）。
      */
     private fun openDocumentSafely() {
         if (isSafStubbed()) {
@@ -530,16 +564,10 @@ class MainActivity : ComponentActivity() {
                                 onBack = { screen = "library" },
                                 onGrant = { ensureStoragePermission() },
                                 onOpenAllFiles = { openAllFilesSettings() },
-                                onOpenAppDir = {
-                                    // 压栈而不是清栈：这样「返回上级」还能回到 /sdcard
-                                    val d = appBooksDir()
-                                    if (dirStack.lastOrNull()?.absolutePath != d.absolutePath) dirStack.add(d)
-                                    if (dirStack.size > 1) storageBlocked = false
-                                    refreshDir()
-                                    if (entries.isEmpty()) toast("专属文件夹也是空的 —— 可以用数据线或 MT 管理器把书拷进去")
-                                },
+                                onOpenAppDir = { openAppDir() },
                                 // SAF：把系统支持的电子书类型都列出来，别把用户的书藏掉
                                 onOpenDocument = { openDocumentSafely() },
+                                onImportLocal = { openImportLocal() },
                                 // 手机传书：局域网小网页，手机浏览器把书推进来
                                 wifiOn = wifiServer != null,
                                 wifiInfo = wifiInfo,

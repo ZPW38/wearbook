@@ -70,6 +70,8 @@ fun ImportScreen(
     onOpenAppDir: () -> Unit,
     /** 用系统文档界面选书（SAF）：不需要任何存储权限，任何设备上都可用 */
     onOpenDocument: () -> Unit,
+    /** 从设备导入：先试 SAF，不可用/空壳时自动落到专属文件夹 */
+    onImportLocal: () -> Unit,
     /** 手机传书是否在跑 / 要显示的访问地址 / 开关 / 弹出二维码 */
     wifiOn: Boolean,
     wifiInfo: String?,
@@ -88,9 +90,12 @@ fun ImportScreen(
                 modifier = Modifier.padding(start = 2.dp).weight(1f),
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
-            // 系统选择器：手机上很好用；Wear OS 上是空壳，点了会提示改走别的路
+            // 从设备导入：一条路走到黑 —— 先试系统选择器，Wear OS 上它是个空壳，
+            // 那就自动落到「专属文件夹」。
+            // ⚠️ 为什么合成一个图标：450px 宽的标题栏放 5 个 44dp 图标就挤出去了，
+            // 实测最右那个会被裁掉一半（点不到）。合并后 4 个刚好。
             M3IconAction(
-                R.drawable.ic_description, "从系统文件选书", onOpenDocument,
+                R.drawable.ic_description, "从设备导入", onImportLocal,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
             // 手机传书：手表开一个小网页，手机浏览器打开就能把书推进来 —— 不用数据线、不用权限。
@@ -103,12 +108,6 @@ fun ImportScreen(
             M3IconAction(
                 R.drawable.ic_add, "链接导入", { urlExpanded = !urlExpanded },
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // 专属文件夹：**降级**。数据线传书对手表用户太麻烦，只在没有更好办法时兜底，
-            // 所以不再占据标题栏的显眼位置（原先是第一个、还带 primary 色）。
-            M3IconAction(
-                R.drawable.ic_folder, "专属文件夹（备用）", onOpenAppDir,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
             )
             // 返回上一级：固定在标题栏，不在列表里 —— 目录为空时也一定点得到
             M3IconAction(R.drawable.ic_arrow_upward, "返回上级目录", onGoUp, enabled = canGoUp)
