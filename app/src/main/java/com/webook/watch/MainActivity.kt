@@ -389,8 +389,19 @@ class MainActivity : ComponentActivity() {
                     if (w != null && h != null && h > 0f) w / h else null
                 } else null
             }
-            // 圆屏安全区：按屏幕短边等比推算（上下留得多、左右留得少），不再用固定 10dp ——
-            // 10dp 在顶部/底部其实挡不住弧线，标题和底部栏会被咬掉一块。
+            // 圆屏安全区。
+            //
+            // ⚠️ 这里**不能只给四边一个固定 padding**：圆屏的可用宽度随高度变化
+            // （正中满宽、越往上下越窄），固定内缩挡不住弧线。
+            // 以 450px 圆屏（density 2 → 短边 225dp）实测：
+            //   y=24px（标题栏）处可用半宽只剩 101px，左边界要退到 x=124；
+            //   而旧的 0.028 内缩只有 12.6px —— 标题整段都在圆外。
+            //
+            // ⚠️ 也**不能**把这个水平内缩直接当垂直 padding 用：y=0 处需要 112dp，
+            // 那是整个半径，内容会被压成零。
+            //
+            // 正确做法：竖向只留适度白（避免贴边），水平内缩按**每一行自己所在的高度**算。
+            // 这一层负责竖向，水平交给各屏自己按行处理（见 [CircleSafeArea.horizontalInsetAt]）。
             val cfg = LocalConfiguration.current
             val shortSideDp = minOf(cfg.screenWidthDp, cfg.screenHeightDp).toFloat()
             val circleInset = CircleSafeArea.ofDp(shortSideDp)
@@ -467,7 +478,8 @@ class MainActivity : ComponentActivity() {
                                 onImport = { screen = "import"; ensureStoragePermission() },
                                 onScan = { scanAndCollect() },
                                 scanning = scanning,
-                                onSettings = { screen = "settings" }
+                                onSettings = { screen = "settings" },
+                                round = settings.roundScreen
                             )
 
                             "comic" -> current?.let { (meta, chapters) ->

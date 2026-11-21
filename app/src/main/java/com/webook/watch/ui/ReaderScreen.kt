@@ -1088,6 +1088,11 @@ private fun ReaderOverlay(
             Modifier.fillMaxSize().clickable(interactionSource = null, indication = null) { onDismiss() }
         )
 
+        // 圆屏：顶部工具栏贴着屏幕上沿，那里弧线收得最狠 ——
+        // 按该高度算内缩，否则两端的返回/目录图标会被圆弧切掉。
+        val cfgR = androidx.compose.ui.platform.LocalConfiguration.current
+        val shortDpR = minOf(cfgR.screenWidthDp, cfgR.screenHeightDp).toFloat()
+        val barInset = if (round) CircleSafeArea.horizontalInsetAt(shortDpR, 0f, 52f) else 0.dp
         Surface(
             shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp),
             color = barColor,
@@ -1095,7 +1100,7 @@ private fun ReaderOverlay(
         ) {
             // 顶部：返回 / 书名·章节名（点一下进目录）/ 说明
             Row(
-                Modifier.fillMaxWidth().padding(4.dp),
+                Modifier.fillMaxWidth().padding(4.dp).padding(horizontal = barInset),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 IconButton(onClick = onBack) {

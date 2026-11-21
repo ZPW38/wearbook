@@ -57,16 +57,80 @@ fun LibraryScreen(
     /** 扫目录收书：把 Download / Books 里已经下载好的书直接收进书架 */
     onScan: () -> Unit,
     scanning: Boolean,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    /** 圆屏：标题栏要按自身高度额外内缩，否则最右侧图标会跑到圆外 */
+    round: Boolean = false
 ) {
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
-            // 标题栏：给一层实底色，标题和图标显式配色 —— 这样任何主题/投屏下都不会"字和底一个颜色"
-            Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+            /*
+             * 标题栏。
+             *
+             * ⚠️ 圆屏上**不能靠加水平 padding 来避让弧线** —— 试过，会算出一个
+             * 60dp 以上的内缩（450px 屏、标题栏所在高度），标题栏被压得一个字都放不下。
+             *
+             * 真正的原因是布局方向错了：圆屏顶部是一条弧，两端最窄、中间最宽。
+             * 把「标题 + 两个图标」硬排成一行，两端必然顶到弧线上。
+             *
+             * 所以圆屏改成**上下两行**：标题独占一行（居中，只占中间最宽处），
+             * 两个图标放第二行（仍然在中间区域，不会碰到两端）。
+             * 方屏保持原来的一行排布，不浪费高度。
+             */
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainer,
+                // 圆屏：顶部是整条弧线。方形底色会在四角露出「方纸贴在圆屏上」的硬边，
+                // 用大圆角 + 左右内缩让底色跟着弧线走（该高度圆内只剩约 306px 宽）。
+                // 四角都收：圆屏顶部是弧线，只收下方两角的话上方会露出方角
+                shape = if (round) RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp,
+                                                     bottomStart = 28.dp, bottomEnd = 28.dp)
+                        else RoundedCornerShape(0.dp),
+                modifier = if (round) Modifier.fillMaxWidth().padding(horizontal = 6.dp)
+                           else Modifier.fillMaxWidth()
+            ) {
+                if (round) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "我的书架",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Row(
+                            Modifier.padding(top = 2.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(onClick = onScan, enabled = !scanning) {
+                                if (scanning) {
+                                    CircularProgressIndicator(
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(18.dp),
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_folder),
+                                        contentDescription = "扫描目录收书",
+                                        tint = MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                            IconButton(onClick = onSettings) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_settings),
+                                    contentDescription = "设置",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                     Text(
                         "我的书架",
                         style = MaterialTheme.typography.titleMedium,
@@ -97,8 +161,9 @@ fun LibraryScreen(
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
-                }
-            }
+                    }   // Row 结束（方屏一行布局）
+                }       // else 结束
+            }           // Surface 结束
 
             if (books.isEmpty()) {
                 Column(
@@ -127,7 +192,8 @@ fun LibraryScreen(
                     )
                 }
             } else {
-                LazyColumn(contentPadding = PaddingValues(bottom = 76.dp)) {
+                // 圆屏 FAB 抬高了 10dp，列表底部留白同步加大，否则最后一行会被 FAB 压住
+                LazyColumn(contentPadding = PaddingValues(bottom = if (round) 92.dp else 76.dp)) {
                     items(books, key = { it.id }) { b ->
                         BookRow(
                             book = b,
@@ -149,7 +215,14 @@ fun LibraryScreen(
 
         FloatingActionButton(
             onClick = onImport,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp),
+            // 圆屏：底部两角往里收，FAB 贴右下会盖住书名和进度条（实测「已读 60%」被遮）。
+            // 往中间挪一点、再抬高一点，既在圆内也不压内容。
+            // 圆屏：缩小到 48dp 并贴到右下角 —— 全尺寸 FAB 会盖住卡片的书名与进度条
+            // （实测「TXT · 60 章 · 已读 60%」被遮掉一半）。
+            modifier = Modifier.align(Alignment.BottomEnd)
+                .then(if (round) Modifier.size(48.dp) else Modifier)
+                .padding(end = if (round) 18.dp else 16.dp,
+                         bottom = if (round) 18.dp else 16.dp),
             containerColor = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             shape = RoundedCornerShape(16.dp)
