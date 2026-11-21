@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import com.webook.watch.data.Bookmark
 import com.webook.watch.data.Chapter
 import com.webook.watch.data.SearchHit
+import com.webook.watch.ui.components.M3Card
 import com.webook.watch.data.Settings
 
 /* ============================================================
@@ -250,13 +251,21 @@ fun TocPanel(
                 state = listState,
                 contentPadding = PaddingValues(bottom = 12.dp)
             ) {
-                itemsIndexed(chapters) { i, c ->
+                // ⚠️ 必须给 key：不提供时 Compose 按**位置**复用列表项，
+                // 1102 章的书里一旦章节列表变化（更新书籍、换书），整表会按错误身份重建，
+                // 表现为高亮串位、滚动位置跳。key 用序号 + 标题前若干字，
+                // 既稳定又不会因为两章同名而冲突。
+                itemsIndexed(
+                    chapters,
+                    key = { i, c -> "$i:${c.title.take(16)}" }
+                ) { i, c ->
                     val cur = i == chapterIdx
-                    Surface(
-                        color = if (cur) MaterialTheme.colorScheme.secondaryContainer
-                        else MaterialTheme.colorScheme.surface,
+                    // 用 M3Card：带按压反馈（按下 0.97）。目录是阅读时最常点的列表，
+                    // 原先裸 Surface 完全没有按压态，手表上点一下不知道有没有响应。
+                    M3Card(
                         onClick = { onJumpChapter(i); onClose() },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 3.dp)
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 3.dp),
+                        emphasized = cur
                     ) {
                         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(

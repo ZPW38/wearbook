@@ -168,9 +168,18 @@ fun ReaderScreen(
     var zoomImage by remember { mutableStateOf<ImageRef?>(null) }
     /**
      * 全书插图序列（按阅读顺序、已去重）。查看器打开后靠它做「上一张 / 下一张」。
-     * 只在换书（chapters 变化）时算一次：只是逐段看一眼前缀，几万段也不过几毫秒。
+     *
+     * ⚠️ 原先写成 `remember(chapters) { collectImages(chapters) }`，注释还说
+     * 「几万段也不过几毫秒」—— 实测**完全是错的**：
+     * 那本 1102 章 / 每章 53 段的书有近 6 万段，在华为手表上要 **2.7 秒**，
+     * 而这发生在 remember 里，也就是**主线程的组合过程**中，
+     * 结果是每次点开插图、每次进阅读页都会卡住两三秒。
+     * 现在改为后台线程算，算完再赋值；期间看图为空，到齐后自动补上。
      */
-    val galleryImages = remember(chapters) { collectImages(chapters) }
+    var galleryImages by remember(chapters) { mutableStateOf<List<ImageRef>>(emptyList()) }
+    LaunchedEffect(chapters) {
+        galleryImages = withContext(Dispatchers.Default) { collectImages(chapters) }
+    }
 
     // 订阅设置变化：设置一改，本页（含各个面板）就会重新读取最新的值
     settings.rev
@@ -1533,13 +1542,15 @@ private fun ImageZoomView(
          * 只有一张图时整条不出现 —— 数量为 1 的书不该看到"1 / 1"这种没用的控件。
          */
         if (total > 1) {
+            // ⚠️ 0.45 太淡：实测在浅色整页插图（那种白底人物图）上，
+            // 白字计数几乎看不见。提高到 0.72 —— 仍能透出一点底图，但文字始终清晰。
             Surface(
-                color = Color.Black.copy(alpha = 0.45f),
+                color = Color.Black.copy(alpha = 0.72f),
                 shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 18.dp)
-                    .height(44.dp)
+                    .height(46.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -1579,12 +1590,14 @@ private fun ImageZoomView(
          * 放大/缩小和返回放一起，单手拇指一横扫就够到，不用够角。
          */
         Surface(
-            color = Color.Black.copy(alpha = 0.45f),
+            color = Color.Black.copy(alpha = 0.72f),
             shape = RoundedCornerShape(24.dp),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 24.dp)
-                .height(44.dp)
+                // 44dp 装不下「18dp 图标 + 11sp 文字」，文字会被压出圆角之外；
+                // 实测截图里"返回/放大/缩小"是溢出到图片上的。50dp 刚好留出呼吸空间。
+                .height(50.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1670,12 +1683,12 @@ private fun ZoomBarButton(
         onClick = onClick,
         color = Color.Transparent,
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.height(44.dp)
+        modifier = Modifier.height(50.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
-            modifier = Modifier.padding(horizontal = 12.dp)
+            modifier = Modifier.padding(horizontal = 10.dp)
         ) {
             Icon(
                 painter = painterResource(icon),
