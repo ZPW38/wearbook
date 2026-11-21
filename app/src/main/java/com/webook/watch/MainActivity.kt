@@ -70,6 +70,7 @@ import com.webook.watch.data.LibraryStore
 import com.webook.watch.data.Progress
 import com.webook.watch.data.Settings
 import com.webook.watch.data.UrlImport
+import com.webook.watch.data.WifiTransfer
 import com.webook.watch.parser.BookParser
 import com.webook.watch.parser.ParsedBook
 import com.webook.watch.parser.SUPPORTED_EXT
@@ -82,6 +83,7 @@ import com.webook.watch.ui.ComicReader
 import com.webook.watch.ui.ConfirmBox
 import com.webook.watch.ui.comicPages
 import com.webook.watch.ui.DirPickerScreen
+import com.webook.watch.ui.QrTransferScreen
 import com.webook.watch.ui.LibraryScreen
 import com.webook.watch.ui.ReaderScreen
 import com.webook.watch.ui.UpdateDialog
@@ -147,6 +149,12 @@ class MainActivity : ComponentActivity() {
 
     /** 漫画模式的翻页回调（表冠 / 音量键共用） */
     private var comicTurn: ((Boolean) -> Unit)? = null
+
+    /** 手机传书（局域网小网页）的服务句柄与提示状态 */
+    private var wifiServer: com.webook.watch.data.WifiTransfer.Server? by mutableStateOf(null)
+    private var wifiInfo by mutableStateOf<String?>(null)
+    /** 二维码只编码**一个**地址：多网卡时挑最像"家用局域网"的那个 */
+    private var wifiQrUrl by mutableStateOf<String?>(null)
 
     /** 检测到「书架里已有同一本书的旧版本」，等用户选更新还是保留两本 */
     private var pendingUpdate by mutableStateOf<ImportOutcome.UpdateOffer?>(null)
@@ -352,7 +360,10 @@ class MainActivity : ComponentActivity() {
             val cfg = LocalConfiguration.current
             val shortSideDp = minOf(cfg.screenWidthDp, cfg.screenHeightDp).toFloat()
             val circleInset = CircleSafeArea.ofDp(shortSideDp)
-            WearBookTheme(darkTheme = dark) {
+            // settings.rev 让"改了动态取色开关"能触发重组（settings 本身不是 Compose 状态）
+            @Suppress("UNUSED_EXPRESSION")
+            settings.rev
+            WearBookTheme(darkTheme = dark, dynamicColor = settings.dynamicColor) {
                 // 模拟屏幕规格时，外面这层负责补黑边并居中；平时它完全透明、不参与视觉
                 Box(
                     Modifier
@@ -384,15 +395,22 @@ class MainActivity : ComponentActivity() {
                 ) {
                     AnimatedContent(
                         targetState = screen,
+                        // 页面切换用 Material 3 的 **shared axis (X)** 模式：新页面横向进入、
+                        // 旧页面向反方向小幅退出。时长取 M3 motion scheme 的
+                        // medium1(300ms 进) / short2(200ms 出) —— 早先手写的 260/160 两个数
+                        // 既不在 M3 的档位里，快慢也与按压反馈（90/160ms）不成比例。
                         transitionSpec = {
                             val forward = targetState == "reader"
-                            if (forward) {
-                                (slideInHorizontally(tween(260)) { it } + fadeIn(tween(200))) togetherWith
-                                    (slideOutHorizontally(tween(260)) { -it / 3 } + fadeOut(tween(160)))
-                            } else {
-                                (slideInHorizontally(tween(260)) { -it / 3 } + fadeIn(tween(200))) togetherWith
-                                    (slideOutHorizontally(tween(260)) { it } + fadeOut(tween(160)))
-                            }
+                            val dir = if (forward) 1 else -1
+                            (
+                                slideInHorizontally(
+                                    animationSpec = tween(300, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                                ) { it * dir } + fadeIn(tween(210, delayMillis = 60))
+                            ) togetherWith (
+                                slideOutHorizontally(
+                                    animationSpec = tween(200, easing = androidx.compose.animation.core.FastOutLinearInEasing)
+                                ) { -it * dir / 4 } + fadeOut(tween(140))
+                            )
                         },
                         label = "screen"
                     ) { s ->
@@ -521,7 +539,18 @@ class MainActivity : ComponentActivity() {
                                     if (entries.isEmpty()) toast("专属文件夹也是空的 —— 可以用数据线或 MT 管理器把书拷进去")
                                 },
                                 // SAF：把系统支持的电子书类型都列出来，别把用户的书藏掉
-                                onOpenDocument = { openDocumentSafely() }
+                                onOpenDocument = { openDocumentSafely() },
+                                // 手机传书：局域网小网页，手机浏览器把书推进来
+                                wifiOn = wifiServer != null,
+                                wifiInfo = wifiInfo,
+                                onWifiToggle = { toggleWifiTransfer() },
+                                onShowQr = { if (wifiInfo != null) screen = "qr" }
+                            )
+
+                            // 二维码页：全屏只放一个码，手机扫一下就能打开传书页面
+                            "qr" -> QrTransferScreen(
+                                url = qrUrl(),
+                                onBack = { screen = "import" }
                             )
 
                             "pickdir" -> DirPickerScreen(
@@ -744,6 +773,8 @@ class MainActivity : ComponentActivity() {
             // 目录选择器是从设置页点进来的，按返回就该回设置页。
             // 漏了这一支会掉进下面的 else，变成「再按一次退出」—— 看起来像返回键失灵。
             "pickdir" -> { screen = "settings" }
+            // 二维码页是从导入页点进来的，返回就回导入页（不是回书架）
+            "qr" -> { screen = "import" }
             else -> {
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt < 2000) finish() else { lastBackAt = now; toast("再按一次退出") }
@@ -1081,7 +1112,79 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /* ---------------- 目录选择器：给「扫目录收书」选路径 ---------------- */
+    /* ---------------- 手机传书：手表起一个小网页，手机浏览器推进来 ---------------- */
+
+    /**
+     * 开/关手机传书。
+     *
+     * 为什么是这条而不是数据线：手机和手表本来就在同一个 WiFi，用户不用找线、不用装工具，
+     * 手机上用自己熟悉的键盘和文件选择器，比在表盘上敲直链轻松得多。
+     * 详见 [com.webook.watch.data.WifiTransfer] 的边界说明（只收上传、不暴露任何已有文件）。
+     */
+    private fun toggleWifiTransfer() {
+        val running = wifiServer
+        if (running != null) {
+            running.stop()
+            wifiServer = null
+            wifiInfo = null
+            wifiQrUrl = null
+            if (screen == "qr") screen = "import"
+            toast("已停止手机传书")
+            return
+        }
+        val dir = File(cacheDir, "wifi_upload").apply { mkdirs() }
+        val server = WifiTransfer.start(dir) { name, file ->
+            // 服务线程回调：立刻把它当成一次正常导入处理
+            android.util.Log.i("WearBook/WIFI", "upload received: $name -> ${file.absolutePath} (${file.length()} B)")
+            runOnUiThread {
+                android.util.Log.i("WearBook/WIFI", "dispatch import for $name")
+                onWifiUpload(name, file)
+            }
+        }
+        if (server == null) {
+            toast("开不起来 —— 手表可能没连上 WiFi")
+            return
+        }
+        wifiServer = server
+        val ips = WifiTransfer.localAddresses()
+        if (ips.isEmpty()) {
+            wifiInfo = "手机连同一个 WiFi，地址：本机:${server.port}"
+            wifiQrUrl = null
+        } else {
+            wifiInfo = ips.joinToString("\n") { "http://$it:${server.port}" }
+            // 多网卡时优先挑 192.168.x / 10.x / 172.16~31.x 这类家用网段，
+            // 避免把 "172.20.48.1"（虚拟网卡）画进二维码让用户扫不到
+            val best = ips.firstOrNull { it.startsWith("192.168.") }
+                ?: ips.firstOrNull { it.startsWith("10.") }
+                ?: ips.firstOrNull { it.startsWith("172.") }
+                ?: ips.first()
+            wifiQrUrl = "http://$best:${server.port}"
+        }
+    }
+
+    /** 二维码要编码的地址；没开服务时给个占位（正常情况下进不了这一页） */
+    private fun qrUrl(): String = wifiQrUrl ?: wifiInfo ?: ""
+
+    /** 手机传上来的文件：搬到长期目录后走正常导入流程 */
+    private fun onWifiUpload(name: String, file: File) {
+        if (importing != null) { toast("正在导入，请稍候…"); return }
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val isEpub = name.endsWith(".epub", true)
+                val target = if (isEpub) File(keepDir(), name) else file
+                if (isEpub) file.copyTo(target, overwrite = true)
+                val bytes = if (isEpub) null else target.readBytes()
+                val outcome = parseAndStore(name, bytes, if (isEpub) target else null)
+                withContext(Dispatchers.Main) {
+                    if (isEpub) runCatching { file.delete() }
+                    finishImport(outcome, quiet = true)
+                }
+            } catch (e: Throwable) {
+                withContext(Dispatchers.Main) { toast("「$name」导入失败：${friendlyError(e)}") }
+            }
+        }
+    }
+
 
     /** 只列目录：选书路径时列文件没有意义，还会把列表撑满 */
     private fun refreshPickDir() {

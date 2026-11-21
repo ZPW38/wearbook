@@ -6,6 +6,7 @@ import com.webook.watch.data.BookMerge
 import com.webook.watch.data.ImageRef
 import com.webook.watch.data.BookScanner
 import com.webook.watch.data.UrlImport
+import com.webook.watch.data.WifiTransfer
 import com.webook.watch.data.chapterFitsBook
 import com.webook.watch.data.collectImages
 import com.webook.watch.data.imageParagraph
@@ -677,5 +678,32 @@ class CoreLogicTest {
         assertEquals("第1章 开端", chapters[0].title)
         assertEquals(2, chapters[0].paragraphs.size)
     }
-}
+    /* ---------------- 手机传书：文件名消毒（v1.9.0） ---------------- */
 
+    @Test
+    fun `传书文件名保留扩展名`() {
+        // 回归：曾把 "." 误列进控制字符黑名单，book.txt 变成 booktxt，
+        // 扩展名丢失导致格式判断失败、导入静默不生效
+        assertEquals("book.txt", WifiTransfer.sanitize("book.txt"))
+        assertEquals("小说.epub", WifiTransfer.sanitize("小说.epub"))
+        assertEquals("a.b.c.mobi", WifiTransfer.sanitize("a.b.c.mobi"))
+    }
+
+    @Test
+    fun `传书文件名去掉路径与控制字符`() {
+        // 只剩文件名部分，不能写到目标目录之外
+        assertEquals("book.epub", WifiTransfer.sanitize("../../etc/book.epub"))
+        assertEquals("book.epub", WifiTransfer.sanitize("C:\\Users\\x\\book.epub"))
+        // 控制字符被剔除
+        assertEquals("book.epub", WifiTransfer.sanitize("bo\u0000ok\u001f.epub"))
+        // 非法字符被剔除
+        assertEquals("book.epub", WifiTransfer.sanitize("bo:ok*.epub"))
+    }
+
+    @Test
+    fun `传书文件名为空时有兜底名`() {
+        val n = WifiTransfer.sanitize("///")
+        assertTrue("不能返回空文件名", n.isNotEmpty())
+        assertFalse("兜底名不能含路径分隔符", n.contains('/'))
+    }
+}

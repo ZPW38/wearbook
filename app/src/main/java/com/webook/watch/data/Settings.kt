@@ -47,6 +47,17 @@ class Settings(ctx: Context) {
         get() = sp.getString("theme", "dark") ?: "dark"
         set(v) = sp.edit().putString("theme", v).apply()
 
+    /**
+     * Material You 动态取色：跟随系统壁纸配色。
+     *
+     * **默认关闭**。手表 ROM 的取色器实现参差不齐：部分 Wear OS 定制系统
+     * 取出的颜色对比度很差（深底上出现深字），个别精简 ROM 甚至直接抛异常。
+     * 固定色板在哪个系统上都长一样，先保证可读；想要动态色的人可以自己开。
+     */
+    var dynamicColor: Boolean
+        get() = sp.getBoolean("dync", false)
+        set(v) { sp.edit().putBoolean("dync", v).apply(); rev++ }
+
     /** 自动翻页间隔秒，0 = 关闭 */
     var autoSeconds: Int
         get() = sp.getInt("auto", 0)

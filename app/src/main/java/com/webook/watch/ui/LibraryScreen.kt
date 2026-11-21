@@ -22,6 +22,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
@@ -163,13 +169,27 @@ private fun BookRow(
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // 按压缩放：手表屏小、无震动反馈，没有按压态时用户会怀疑点没点上，于是连点导致误翻页
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.97f else 1f,
+        animationSpec = tween(if (pressed) 90 else 160),
+        label = "bookPress"
+    )
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceContainer,
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 10.dp, vertical = 4.dp)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .scale(scale)
+            .combinedClickable(
+                interactionSource = interaction,
+                indication = androidx.compose.material3.ripple(),
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
     ) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             Surface(

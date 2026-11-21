@@ -1,6 +1,8 @@
 package com.webook.watch.ui
 
 import com.webook.watch.R
+import com.webook.watch.ui.components.M3Card
+import com.webook.watch.ui.components.M3IconAction
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -67,61 +69,49 @@ fun ImportScreen(
     onOpenAllFiles: () -> Unit,
     onOpenAppDir: () -> Unit,
     /** 用系统文档界面选书（SAF）：不需要任何存储权限，任何设备上都可用 */
-    onOpenDocument: () -> Unit
+    onOpenDocument: () -> Unit,
+    /** 手机传书是否在跑 / 要显示的访问地址 / 开关 / 弹出二维码 */
+    wifiOn: Boolean,
+    wifiInfo: String?,
+    onWifiToggle: () -> Unit,
+    onShowQr: () -> Unit
 ) {
     var urlText by remember { mutableStateOf("") }
     var urlExpanded by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
         Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_arrow_back),
-                    contentDescription = "返回", tint = MaterialTheme.colorScheme.onSurface
-                )
-            }
+            M3IconAction(R.drawable.ic_arrow_back, "返回", onBack)
             Text(
                 "导入图书", style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(start = 2.dp).weight(1f),
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
-            // 专属文件夹：**Wear OS 上唯一真正能用的本地导入通道**（/sdcard/Android/data/<包名>/files，
-            // 应用自己的目录，不需要任何权限，数据线放书进去就能读）。
-            // ⚠️ 放进标题栏而不是列表上方：450×450@320dpi 只有 225×225dp，
-            // 列表外面每多一行控件，文件列表就被挤掉一截，最后直接看不见。
-            IconButton(onClick = onOpenAppDir) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_folder),
-                    contentDescription = "专属文件夹",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-            // 系统选择器：手机上很好用；Wear OS 上是空壳，点了会提示改走专属文件夹
-            IconButton(onClick = onOpenDocument) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_description),
-                    contentDescription = "从系统文件选书",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            // 系统选择器：手机上很好用；Wear OS 上是空壳，点了会提示改走别的路
+            M3IconAction(
+                R.drawable.ic_description, "从系统文件选书", onOpenDocument,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // 手机传书：手表开一个小网页，手机浏览器打开就能把书推进来 —— 不用数据线、不用权限。
+            M3IconAction(
+                R.drawable.ic_autoplay, "手机传书", onWifiToggle,
+                tint = if (wifiOn) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
             // 链接导入：列表有内容时这张卡片会收起来，入口就靠这个 ＋（展开后卡片会自己出来）
-            IconButton(onClick = { urlExpanded = !urlExpanded }) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_add),
-                    contentDescription = "链接导入",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            M3IconAction(
+                R.drawable.ic_add, "链接导入", { urlExpanded = !urlExpanded },
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            // 专属文件夹：**降级**。数据线传书对手表用户太麻烦，只在没有更好办法时兜底，
+            // 所以不再占据标题栏的显眼位置（原先是第一个、还带 primary 色）。
+            M3IconAction(
+                R.drawable.ic_folder, "专属文件夹（备用）", onOpenAppDir,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+            )
             // 返回上一级：固定在标题栏，不在列表里 —— 目录为空时也一定点得到
-            IconButton(onClick = onGoUp, enabled = canGoUp) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_arrow_upward),
-                    contentDescription = "返回上级目录",
-                    tint = MaterialTheme.colorScheme.onSurface
-                        .copy(alpha = if (canGoUp) 1f else 0.28f)
-                )
-            }
+            M3IconAction(R.drawable.ic_arrow_upward, "返回上级目录", onGoUp, enabled = canGoUp)
         }
         }
         // 当前路径（可滚动截断，让用户知道在哪儿）
@@ -131,6 +121,30 @@ fun ImportScreen(
             modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 4.dp),
             maxLines = 1, overflow = TextOverflow.Ellipsis
         )
+
+        // 手机传书：开启后显示地址卡片。点卡片弹出二维码（屏幕上放不下码 + 列表，所以独立成页）。
+        if (wifiOn && wifiInfo != null) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                onClick = onShowQr,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 3.dp)
+            ) {
+                Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+                    Text(
+                        "手机扫码传书（点这里）",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        wifiInfo,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(top = 1.dp)
+                    )
+                }
+            }
+        }
 
 
         // Android 11+ 分区存储：没开「所有文件访问」时，系统只让看媒体文件，电子书全部被隐藏。
@@ -209,9 +223,7 @@ fun ImportScreen(
                 // 而 225dp 高的屏幕上多这一行（44dp）就把后面两项文件挤出屏幕外。
                 items(entries, key = { it.file.absolutePath }) { e ->
                     val dim = !e.isDir && !e.isBook
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainer,
+                    M3Card(
                         onClick = { onOpen(e) },
                         modifier = Modifier
                             .fillMaxWidth()

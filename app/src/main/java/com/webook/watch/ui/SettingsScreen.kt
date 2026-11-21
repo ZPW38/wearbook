@@ -68,6 +68,7 @@ fun SettingsScreen(
     var theme by remember { mutableStateOf(settings.theme) }
     var round by remember { mutableStateOf(settings.roundScreen) }
     var edge by remember { mutableStateOf(settings.blockEdgeSwipe) }
+    var dynamicCol by remember { mutableStateOf(settings.dynamicColor) }
     var shown by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { shown = true }
 
@@ -152,6 +153,25 @@ fun SettingsScreen(
                     }
                 }
             }
+            // Material You 动态取色：默认关闭。手表 ROM 的取色质量不可控，
+            // 深底深字会让正文读不清，所以定位成"想玩再开"的实验性开关。
+            SwitchRow(
+                "跟随壁纸配色（实验）",
+                dynamicCol
+            ) { dynamicCol = it; settings.dynamicColor = it; onChange() }
+            Text(
+                when {
+                    android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S ->
+                        "这台设备是 Android 11 及以下，系统没有动态取色，开关不会生效。默认配色已经够用。"
+                    dynamicCol ->
+                        "已开启。配色由系统按壁纸计算 —— 若出现字看不清、颜色怪异，关掉即可恢复。"
+                    else ->
+                        "默认用内置配色，各个系统上表现一致。开启后会跟随壁纸变色，但部分手表的取色对比度较差。"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 6.dp)
+            )
 
             SwitchRow("圆屏手表模式", round) { round = it; settings.roundScreen = it; onChange() }
             SwitchRow("禁用左边缘侧滑返回", edge) { edge = it; settings.blockEdgeSwipe = it; onChange() }
