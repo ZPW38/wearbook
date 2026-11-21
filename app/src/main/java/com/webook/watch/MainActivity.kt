@@ -617,7 +617,8 @@ class MainActivity : ComponentActivity() {
                                         .onFailure { toast("打不开系统设置，请手动去「设置 → 手势」里关闭侧滑返回") }
                                 },
                                 onClearAll = { confirm = Confirm("清空全部数据？",
-                                    "将删除书架上的所有图书、阅读进度与设置，且无法恢复。") { store.clearAll(); refresh() } }
+                                    "将删除书架上的所有图书、阅读进度与设置，且无法恢复。") { store.clearAll(); refresh() } },
+                                round = settings.roundScreen
                             )
                         }
                     }

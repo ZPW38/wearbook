@@ -59,7 +59,9 @@ fun SettingsScreen(
     onPickDir: () -> Unit,
     onBack: () -> Unit,
     onClearAll: () -> Unit,
-    onOpenSystemSettings: () -> Unit
+    onOpenSystemSettings: () -> Unit,
+    /** 圆屏：标题栏要避开顶部弧线 */
+    round: Boolean = false
 ) {
     var fs by remember { mutableStateOf(settings.fontSize) }
     var lh by remember { mutableStateOf(settings.lineSpacing) }
@@ -75,8 +77,20 @@ fun SettingsScreen(
     Column(
         Modifier.fillMaxSize()
     ) {
-        Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-            Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            // 圆屏：方形底色在弧线屏上会露出方角，用大圆角贴合
+            shape = if (round) androidx.compose.foundation.shape.RoundedCornerShape(
+                topStart = 24.dp, topEnd = 24.dp, bottomStart = 28.dp, bottomEnd = 28.dp
+            ) else androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
+            modifier = if (round) Modifier.fillMaxWidth().padding(horizontal = 6.dp)
+                       else Modifier.fillMaxWidth()
+        ) {
+            // 圆屏：标题栏贴屏幕上沿，弧线在这里收得最狠，左右各让一点
+            Row(Modifier.fillMaxWidth()
+                .padding(4.dp)
+                .padding(horizontal = headerInsetNarrow(round)),
+                verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
                     Icon(
                         painter = painterResource(R.drawable.ic_arrow_back),

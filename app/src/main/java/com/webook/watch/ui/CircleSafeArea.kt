@@ -126,3 +126,36 @@ object CircleSafeArea {
         return sqrt(r * r - dy * dy)
     }
 }
+
+/**
+ * 标题栏用的水平内缩（Compose 便捷版）。
+ *
+ * 圆屏顶部弧线收得最狠，各页标题栏贴着上沿时，最左/最右的图标会被切掉。
+ * 这个函数直接按「标题栏大致占顶部 0~52dp」算出需要的内缩，调用方一行搞定：
+ *
+ *     Modifier.fillMaxWidth().padding(horizontal = CircleSafeArea.headerInset(round))
+ *
+ * ⚠️ 只用于**水平**方向。别拿它当垂直 padding —— y=0 处算出来等于整个半径，
+ * 内容会被压成零（本项目踩过，标题栏整个消失）。
+ */
+@androidx.compose.runtime.Composable
+fun headerInset(round: Boolean): androidx.compose.ui.unit.Dp {
+    if (!round) return androidx.compose.ui.unit.Dp(0f)
+    val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+    val shortDp = minOf(cfg.screenWidthDp, cfg.screenHeightDp).toFloat()
+    return CircleSafeArea.horizontalInsetAt(shortDp, 0f, 52f)
+}
+
+/**
+ * 标题栏内缩（窄幅版）：页面只是「返回 + 标题」这种两端不拥挤的布局时用。
+ *
+ * 完整圆弧内缩在标题栏高度上会有 60dp 以上，对两三个元素来说太浪费版面；
+ * 取它的 1/3 就够让图标离开弧线，同时保住标题的可用宽度。
+ */
+@androidx.compose.runtime.Composable
+fun headerInsetNarrow(round: Boolean): androidx.compose.ui.unit.Dp {
+    if (!round) return androidx.compose.ui.unit.Dp(0f)
+    val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+    val shortDp = minOf(cfg.screenWidthDp, cfg.screenHeightDp).toFloat()
+    return (CircleSafeArea.horizontalInsetAt(shortDp, 0f, 52f).value / 3f).dp
+}
