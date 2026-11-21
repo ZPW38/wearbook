@@ -4,6 +4,33 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+/**
+ * 正式签名配置。
+ *
+ * 密码和 keystore 路径都不进仓库（.gitignore 已排除 *.jks / *.keystore），
+ * 从下面两个地方按顺序找：
+ *   1. 环境变量 WEARBOOK_STORE_PASS（CI 用）
+ *   2. 本机 ~/.android/keys/release-password.txt（开发机用）
+ *
+ * 找不到就不签名、继续产出 unsigned 包 —— 这样没有密钥的机器（或 CI 的未授权 PR）
+ * 依然能编译，不会因为缺配置直接构建失败。
+ *
+ * ⚠️ keystore 一旦丢失，之前发出去的包就再也无法覆盖升级（签名不同，安卓会拒绝安装）。
+ *    务必备份 ~/.android/keys/ 整个目录。
+ */
+val releaseKeystore: File? = File(System.getProperty("user.home"), ".android/keys/wearbook-release.jks")
+    .takeIf { it.exists() }
+
+val releaseStorePass: String? = System.getenv("WEARBOOK_STORE_PASS")
+    ?: File(System.getProperty("user.home"), ".android/keys/release-password.txt")
+        .takeIf { it.exists() }
+        ?.readText()
+        // ⚠️ 必须去掉 BOM：PowerShell 的 `Out-File -Encoding utf8`（PS 5.1）会在文件头写
+        // EF BB BF，混进密码里就变成"keystore password was incorrect"，
+        // 而且错误信息只字不提 BOM，极难排查（本项目已踩过一次）。
+        ?.trim('\uFEFF', '\u0000', ' ', '\t', '\r', '\n')
+        ?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "com.webook.watch"
     compileSdk = 34
@@ -26,13 +53,33 @@ android {
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64") }
     }
 
+    // ⚠️ signingConfigs 必须写在 buildTypes **之前**：Kotlin DSL 按声明顺序求值，
+    // buildTypes 里引用 getByName("release") 时它得已经存在，否则报
+    // "SigningConfig with name 'release' not found"。
+    signingConfigs {
+        create("release") {
+            if (releaseKeystore != null) {
+                storeFile = releaseKeystore
+                storePassword = releaseStorePass
+                keyAlias = "wearbook"
+                keyPassword = releaseStorePass
+                // 三个方案都开：v1 给老设备（minSdk 24），v2/v3 给新系统并支持密钥轮换
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true          // R8：去掉未用到的 Compose/图标代码，手表存储更友好
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            // 先产出未签名 APK，最后用 apksigner 以默认 debug keystore 强制 v1+v2 签名
-            signingConfig = null
+            // 有正式 keystore 就直接由 Gradle 签名；没有则留空，产出 unsigned 包交人工处理
+            signingConfig = if (releaseKeystore != null && !releaseStorePass.isNullOrBlank()) {
+                signingConfigs.getByName("release")
+            } else null
         }
     }
 
