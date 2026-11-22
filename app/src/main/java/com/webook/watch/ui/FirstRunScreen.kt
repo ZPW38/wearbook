@@ -122,7 +122,7 @@ fun FirstRunScreen(
             }
 
             Text(
-                "之后可以在「设置」里随时改，也能填具体的屏幕规格。",
+                "之后可在设置里改",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

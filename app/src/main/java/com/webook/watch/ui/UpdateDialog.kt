@@ -107,8 +107,8 @@ fun UpdateDialog(
                 }
 
                 Text(
-                    if (pureAppend) "更新后会保留你的阅读进度，新章节接着往下读。"
-                    else "更新后会按章节名把进度迁到新版本；找不到对应章节时按大致位置放回。",
+                    if (pureAppend) "保留阅读进度，新章节接着读"
+                    else "按章节名迁移进度",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 7.dp)

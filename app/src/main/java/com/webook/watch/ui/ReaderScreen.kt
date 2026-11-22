@@ -655,7 +655,7 @@ fun ReaderScreen(
                     onAddBookmark(
                         Bookmark(chapterIdx, pageIdx, chapters.getOrNull(chapterIdx)?.title.orEmpty(), excerpt)
                     )
-                    tip = "已把这一页加入书签（目录面板里可查看）"
+                    tip = "已加入书签"
                 },
                 onThemeToggle = onThemeToggle,
                 onSpeak = { speaking = !speaking },
@@ -880,7 +880,7 @@ private fun drawLine(
 }
 
 private const val FIRST_TIP =
-    "点屏幕中间打开菜单：底部按钮都能长按看说明。左右两侧点击翻页，目录/搜索在菜单里。"
+    "点中间开菜单，两侧翻页，按钮长按看说明"
 
 /** 滑动阅读：正文按每这么多行切成一块渲染（块之间无缝，视觉上是连续滚动） */
 private const val SCROLL_CHUNK = 24
@@ -1084,6 +1084,8 @@ private fun ReaderOverlay(
     val dimColor = fgColor.copy(alpha = 0.78f)
     // 只在上/下加两条工具栏，中间正文保持原样可见（原来是整屏 94% 遮罩，夜间会把正文压成一片黑）
     Box(Modifier.fillMaxSize()) {
+        // 整屏可点关闭：工具栏会盖在上面（后绘制的优先响应），
+        // 所以这块实际只响应工具栏之外的空白 —— 但它是"点哪儿都能退"的兜底。
         Box(
             Modifier.fillMaxSize().clickable(interactionSource = null, indication = null) { onDismiss() }
         )
@@ -1092,9 +1094,15 @@ private fun ReaderOverlay(
         // 按该高度算内缩，否则两端的返回/目录图标会被圆弧切掉。
         val cfgR = androidx.compose.ui.platform.LocalConfiguration.current
         val shortDpR = minOf(cfgR.screenWidthDp, cfgR.screenHeightDp).toFloat()
-        val barInset = if (round) CircleSafeArea.horizontalInsetAt(shortDpR, 0f, 52f) else 0.dp
+        // ⚠️ 不能用完整圆弧内缩（0~52dp 高度算出约 60dp），
+        // 那会把顶部一行的返回和关闭按钮整个推出圆外 —— 用户就"关不掉菜单"了。
+        // 取 1/3 就够让图标离开弧线，三个元素都还留在圆内。
+        val barInset = if (round) (CircleSafeArea.horizontalInsetAt(shortDpR, 0f, 52f).value / 2f).dp else 0.dp
         Surface(
             shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp),
+            // 圆屏：顶部是弧线，矩形底色会在两端露出方角。但完全透明会让正文
+            // 透过工具栏、和标题叠成两层字（实测）。折中：用接近阅读底色的
+            // 不透明色，并在圆屏下收窄到中轴附近 —— 既遮住正文，两端也不会露方角。
             color = barColor,
             modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter)
         ) {
@@ -1110,31 +1118,37 @@ private fun ReaderOverlay(
                         tint = if (round) fgColor.copy(alpha = 0.72f) else fgColor
                     )
                 }
-                Column(
-                    Modifier.weight(1f).combinedClickable(
+                // 圆屏：顶部只有返回 / 书名 / 关闭三个元素。
+                // 章节号和进度在下面那行「第 x/61 章 · 第 y 页 · z%」已经显示，
+                // 这里再放一遍会把顶栏挤成两行、在 225dp 屏上和进度行叠在一起。
+                Box(
+                    Modifier.weight(1f).height(40.dp).combinedClickable(
                         onClick = onOpenToc,
-                        onLongClick = { onTip("章节名：点一下打开目录（可跳章、看书签）") }
-                    )
+                        onLongClick = { onTip("打开目录") }
+                    ),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // 圆屏：顶部两侧是弧形，标题靠左会显得歪；居中后正好落在圆弧之间的视觉中轴上
                     Text(
-                        chapterTitle.ifBlank { "第 ${chapterIdx + 1} 章" },
-                        style = MaterialTheme.typography.titleSmall,
+                        title,
+                        style = MaterialTheme.typography.bodySmall,
                         color = fgColor,
-                        textAlign = if (round) TextAlign.Center else TextAlign.Start,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        title, style = MaterialTheme.typography.labelSmall,
-                        color = dimColor,
-                        textAlign = if (round) TextAlign.Center else TextAlign.Start,
                         maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
                 }
-                IconButton(onClick = onOpenToc) {
+                /*
+                 * 关闭按钮。
+                 *
+                 * 原来这里放的是「目录」图标，但底部工具栏第一行第一个就是「目录」——
+                 * 同一个功能占两个位置，反而把最需要的「关掉菜单」挤没了。
+                 *
+                 * 而"点空白处收起"在圆屏上很不可靠：上下两条工具栏占掉大半屏，
+                 * 开了圆屏安全边距后两侧又被弧线切掉，中间那条缝窄到很难点中，
+                 * 用户就卡在菜单里出不来。换成一个看得见的 × 最稳。
+                 */
+                IconButton(onClick = onDismiss) {
                     Icon(
-                        painter = painterResource(R.drawable.ic_menu_book),
-                        contentDescription = "目录",
+                        painter = painterResource(R.drawable.ic_close),
+                        contentDescription = "关闭菜单",
                         tint = if (round) fgColor.copy(alpha = 0.72f) else fgColor
                     )
                 }
@@ -1159,7 +1173,7 @@ private fun ReaderOverlay(
                 ) {
                     TextIconButton(
                         icon = R.drawable.ic_chevron_left, label = "上一章",
-                        tip = "上一章：跳到上一章开头", onClick = onPrevChapter, onTip = onTip, tint = fgColor
+                        tip = "跳到上一章开头", onClick = onPrevChapter, onTip = onTip, tint = fgColor
                     )
                     Column(Modifier.weight(1f)) {
                         Text(
@@ -1177,7 +1191,7 @@ private fun ReaderOverlay(
                     }
                     TextIconButton(
                         icon = R.drawable.ic_chevron_right, label = "下一章",
-                        tip = "下一章：跳到下一章开头", onClick = onNextChapter, onTip = onTip, tint = fgColor
+                        tip = "跳到下一章开头", onClick = onNextChapter, onTip = onTip, tint = fgColor
                     )
                 }
 
@@ -1185,23 +1199,23 @@ private fun ReaderOverlay(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                     TextIconButton(
                         icon = R.drawable.ic_search, label = "搜索",
-                        tip = "全文搜索：在当前这本书已缓存的章节里找关键词，点结果直接跳到那一页（只搜本机内容）",
+                        tip = "搜已缓存章节，点结果跳页",
                         onClick = onSearch, onTip = onTip, tint = fgColor
                     )
                     TextIconButton(
                         icon = R.drawable.ic_autoplay,
                         label = if (autoSeconds > 0) "自动${autoSeconds}s" else "自动翻页",
-                        tip = "自动翻页：点一下在 3/5/10/20/30 秒与关闭之间切换（1~30 秒任意值在设置里调）；滑动模式下自动往下滚一屏，滚到章末会自己接下一章",
+                        tip = "3/5/10/20/30 秒循环，设置里可调任意值",
                         onClick = onAutoPage, onTip = onTip, tint = fgColor
                     )
                     TextIconButton(
                         icon = R.drawable.ic_bookmark, label = "书签",
-                        tip = "书签：把当前这一页记下来，在「目录」面板里查看、跳转，长按可删除",
+                        tip = "记下当前页，在目录里查看",
                         onClick = onBookmark, onTip = onTip, tint = fgColor
                     )
                     TextIconButton(
                         icon = R.drawable.ic_dark_mode, label = "夜间",
-                        tip = "夜间模式：在深色和浅色背景之间切换；具体底色可以在「界面」里换",
+                        tip = "切换深色/浅色背景",
                         onClick = onThemeToggle, onTip = onTip, tint = fgColor
                     )
                 }
@@ -1210,23 +1224,23 @@ private fun ReaderOverlay(
                 Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                     TextIconButton(
                         icon = R.drawable.ic_toc, label = "目录",
-                        tip = "目录：列出所有章节，点一下跳章；同一界面还能看书签",
+                        tip = "章节与书签",
                         onClick = onOpenToc, onTip = onTip, tint = fgColor
                     )
                     TextIconButton(
                         icon = if (speaking) R.drawable.ic_pause else R.drawable.ic_record_voice_over,
                         label = if (speaking) "朗读中" else "朗读",
-                        tip = "朗读：单击开始朗读本页，读完自动翻页；长按进入朗读设置（语速等）",
+                        tip = "朗读本页，长按设语速",
                         onClick = onSpeak, onLongClick = onSpeakSettings, onTip = onTip, tint = fgColor
                     )
                     TextIconButton(
                         icon = R.drawable.ic_format_size, label = "界面",
-                        tip = "界面（排版）：阅读模式（翻页/滑动）、字号、行距、背景色、两端对齐都在这",
+                        tip = "字号、行距、背景等排版设置",
                         onClick = onTypo, onTip = onTip, tint = fgColor
                     )
                     TextIconButton(
                         icon = R.drawable.ic_tune, label = "设置",
-                        tip = "设置：其它设置 —— 屏幕方向、常亮、音量键翻页、点击翻页等，可上下滚动",
+                        tip = "屏幕方向、常亮、翻页方式等",
                         onClick = onOther, onTip = onTip, tint = fgColor
                     )
                 }

@@ -287,7 +287,7 @@ fun TocPanel(
             if (bookmarks.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        "还没有书签：阅读菜单里点「书签」可把当前页记下来",
+                        "还没有书签，菜单里点「书签」添加",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -370,7 +370,7 @@ fun SearchPanel(
                 }
                 q.isBlank() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        "只搜索本机已缓存的章节内容，搜不到在线内容\n命中后点一下直接跳到那一页",
+                        "只搜已缓存章节，点结果跳页",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -493,10 +493,10 @@ fun TypoPanel(
                 }
             }
         }
-        SwitchRow("文字两端对齐", settings.justify, "让每行左右都对齐，中文章节更整齐") { onMutate { justify = it } }
+        SwitchRow("文字两端对齐", settings.justify, "中文章节更整齐") { onMutate { justify = it } }
         SwitchRow(
             "共用布局", settings.sharedLayout,
-            "关闭后，夜间单独保存一套字号行距"
+            "关闭后夜间单独排版"
         ) { onMutate { sharedLayout = it } }
         Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.End) {
             Surface(
@@ -549,7 +549,7 @@ fun OtherPanel(
         }
         SwitchRow(
             "自动翻页", settings.autoSeconds > 0,
-            "打开后按下面的间隔自动往下翻；滑动模式滚到章末会自动接下一章"
+            "按间隔自动翻页"
         ) { on ->
             // 关闭只是把秒数归零，autoRemember 留着上次的值，下次打开直接回到原速度
             onMutate { autoSeconds = if (on) autoRemember else 0 }
@@ -569,9 +569,9 @@ fun OtherPanel(
                 }
             )
         }
-        SwitchRow("阅读时常亮（不熄屏）", settings.keepScreenOn, "屏幕超时") { onMutate { keepScreenOn = it }; onApplySystem() }
+        SwitchRow("阅读时常亮", settings.keepScreenOn, "屏幕超时") { onMutate { keepScreenOn = it }; onApplySystem() }
         SwitchRow("隐藏状态栏", settings.hideStatusbar, "全屏沉浸式阅读") { onMutate { hideStatusbar = it }; onApplySystem() }
-        SwitchRow("音量键翻页", settings.volumeKeys, "音量上=上一章，音量下=下一章") { onMutate { volumeKeys = it } }
+        SwitchRow("音量键翻页", settings.volumeKeys, "音量上/下 = 上/下一章") { onMutate { volumeKeys = it } }
         SwitchRow("点击屏幕两侧翻页", settings.tapPaging, "关闭后点击只用来开关菜单") { onMutate { tapPaging = it } }
         SwitchRow("底部状态栏", settings.showStatusBar, "正文最下方显示一条细状态栏") { onMutate { showStatusBar = it } }
         if (settings.showStatusBar) {

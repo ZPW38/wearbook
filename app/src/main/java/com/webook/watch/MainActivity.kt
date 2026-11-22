@@ -226,7 +226,7 @@ class MainActivity : ComponentActivity() {
     private fun openImportLocal() {
         if (isSafStubbed()) {
             openAppDir()
-            toast("这台手表没有文件选择器，已打开专属文件夹 —— 把书放进去即可")
+            toast("没有文件选择器，已打开专属文件夹")
             return
         }
         val mimes = arrayOf(
@@ -253,7 +253,7 @@ class MainActivity : ComponentActivity() {
         // ⚠️ 必须切回导入页：这个函数现在会被「导入方式」页的卡片调用，
         // 只改 dirStack 不换页的话，用户点完卡片界面纹丝不动 —— 看起来像按钮失灵。
         screen = "import"
-        if (entries.isEmpty()) toast("专属文件夹是空的 —— 用数据线或手机端工具把书放进去")
+        if (entries.isEmpty()) toast("专属文件夹是空的")
     }
 
     /**
@@ -261,7 +261,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun openDocumentSafely() {
         if (isSafStubbed()) {
-            toast("这台手表没有文件选择器，请用「专属文件夹」：数据线连电脑把书放进去即可")
+            toast("请用专属文件夹放书")
             return
         }
         val mimes = arrayOf(
@@ -741,7 +741,7 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier.padding(top = 4.dp)
                                     )
                                     Text(
-                                        "大文件（上千章）可能要十几秒，请稍候",
+                                        "大文件可能需要十几秒",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         textAlign = TextAlign.Center,
@@ -1267,7 +1267,7 @@ class MainActivity : ComponentActivity() {
         wifiServer = server
         val ips = WifiTransfer.localAddresses()
         if (ips.isEmpty()) {
-            wifiInfo = "手机连同一个 WiFi，地址：本机:${server.port}"
+            wifiInfo = "同一 WiFi 下访问本机:${server.port}"
             wifiQrUrl = null
         } else {
             wifiInfo = ips.joinToString("\n") { "http://$it:${server.port}" }
@@ -1428,7 +1428,7 @@ class MainActivity : ComponentActivity() {
                 }
                 if (fresh.isEmpty()) {
                     withContext(Dispatchers.Main) {
-                        toast("扫过了，没有新书（Download / Books 目录里没有没导入过的电子书）")
+                        toast("没有新书")
                     }
                     return@launch
                 }

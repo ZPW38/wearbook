@@ -177,7 +177,7 @@ fun ImportScreen(
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
                     Text(
-                        "这台设备把外部存储锁住了，所以一个文件都列不出来（不是真的空）。" +
+                        "外部存储被锁，列不出文件。请改用专属文件夹" +
                             "可以改用下面这个「专属文件夹」——那是本应用自己的目录，任何系统都允许读写。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onErrorContainer,
@@ -201,7 +201,7 @@ fun ImportScreen(
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(
-                    "需要存储读取权限，才能浏览设备上的图书文件",
+                    "需要存储权限才能浏览文件",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -260,14 +260,14 @@ fun ImportScreen(
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(
-                    if (needAllFiles) "此目录下没有系统允许读取的电子书"
-                    else if (storageBlocked) "系统没有放行读取存储，所以这里列不出文件"
+                    if (needAllFiles) "没有可读的电子书"
+                    else if (storageBlocked) "存储被锁，列不出文件"
                     else "此目录为空，或没有可读的子目录",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    if (needAllFiles) "点上面的按钮开启「所有文件访问」后可看到全部文件"
+                    if (needAllFiles) "开启「所有文件访问」可看到全部文件"
                     else "支持 TXT / EPUB / MOBI / AZW / HTML",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -276,16 +276,14 @@ fun ImportScreen(
                 // Wear OS 上系统选择器是空壳、也访问不了系统文件，专属文件夹才是正路。
                 // 这段必须放在**可滚动的空态区**里：放上面会把文件列表挤成 0 高。
                 Text(
-                    "手表上看不到系统文件？\n" +
-                        "把书放进「专属文件夹」（数据线连电脑，或用手机端工具传），\n" +
-                        "再点上面的按钮就能看到。这一步不需要任何权限。",
+                    "看不到系统文件？把书放进专属文件夹即可，无需权限",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 10.dp, start = 6.dp, end = 6.dp)
                 )
                 // 万一系统就是不给读（部分手表 ROM 锁得死），还有一条不需要权限的路
                 Text(
-                    "兜底：在「MT 管理器」里长按图书 → 分享 → 选「腕上书」\n不用任何权限",
+                    "也可在 MT 管理器里分享图书给腕上书",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
                     modifier = Modifier.padding(top = 10.dp, start = 6.dp, end = 6.dp)

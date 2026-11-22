@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -33,6 +34,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -64,106 +66,90 @@ fun LibraryScreen(
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             /*
-             * 标题栏。
+             * 圆屏标题栏：**不用矩形底色**。
              *
-             * ⚠️ 圆屏上**不能靠加水平 padding 来避让弧线** —— 试过，会算出一个
-             * 60dp 以上的内缩（450px 屏、标题栏所在高度），标题栏被压得一个字都放不下。
+             * 之前是把底色做成大圆角矩形去"贴"圆弧，结果四角照样被圆切掉，
+             * 看起来像一张方纸硬按在表盘上 —— 这就是"边距很丑"的来源。
              *
-             * 真正的原因是布局方向错了：圆屏顶部是一条弧，两端最窄、中间最宽。
-             * 把「标题 + 两个图标」硬排成一行，两端必然顶到弧线上。
-             *
-             * 所以圆屏改成**上下两行**：标题独占一行（居中，只占中间最宽处），
-             * 两个图标放第二行（仍然在中间区域，不会碰到两端）。
-             * 方屏保持原来的一行排布，不浪费高度。
+             * 圆屏的正确做法是**让不该被切的东西压根不存在**：标题居中（只占中轴最宽处）、
+             * 图标也在中轴附近，去掉底色之后，被弧线切到的区域什么也没有。
              */
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                // 圆屏：顶部是整条弧线。方形底色会在四角露出「方纸贴在圆屏上」的硬边，
-                // 用大圆角 + 左右内缩让底色跟着弧线走（该高度圆内只剩约 306px 宽）。
-                // 四角都收：圆屏顶部是弧线，只收下方两角的话上方会露出方角
-                shape = if (round) RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp,
-                                                     bottomStart = 28.dp, bottomEnd = 28.dp)
-                        else RoundedCornerShape(0.dp),
-                modifier = if (round) Modifier.fillMaxWidth().padding(horizontal = 6.dp)
-                           else Modifier.fillMaxWidth()
+            if (round) {
+            // 圆屏：标题和两个图标压成一行，省下约 60dp 给卡片和大加号。
+            // 表盘顶部弧线处很窄，一行居中排版正好落在最宽的中轴上。
+            Row(
+                Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                if (round) {
-                    Column(
-                        Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            "我的书架",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface
+                IconButton(onClick = onScan, enabled = !scanning) {
+                    if (scanning) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.primary
                         )
-                        Row(
-                            Modifier.padding(top = 2.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(onClick = onScan, enabled = !scanning) {
-                                if (scanning) {
-                                    CircularProgressIndicator(
-                                        strokeWidth = 2.dp,
-                                        modifier = Modifier.size(18.dp),
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                } else {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_folder),
-                                        contentDescription = "扫描目录收书",
-                                        tint = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                            }
-                            IconButton(onClick = onSettings) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_settings),
-                                    contentDescription = "设置",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                        }
+                    } else {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_folder),
+                            contentDescription = "扫描目录收书",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                } else {
+                }
+                Text(
+                    "书架",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 6.dp)
+                )
+                IconButton(onClick = onSettings) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_settings),
+                        contentDescription = "设置",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            } else {
+                Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                    Text(
-                        "我的书架",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.weight(1f).padding(start = 8.dp)
-                    )
-                    // 扫目录收书：别的应用（下载器 / MT / 微信）已经把书放好的话，
-                    // 点一下就把 Download、Books 里的新书收进来，不用一个个点导入
-                    IconButton(onClick = onScan, enabled = !scanning) {
-                        if (scanning) {
-                            CircularProgressIndicator(
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(18.dp),
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        } else {
+                        Text(
+                            "我的书架",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f).padding(start = 8.dp)
+                        )
+                        // 扫目录收书：别的应用（下载器 / MT / 微信）已经把书放好的话，
+                        // 点一下就把 Download、Books 里的新书收进来，不用一个个点导入
+                        IconButton(onClick = onScan, enabled = !scanning) {
+                            if (scanning) {
+                                CircularProgressIndicator(
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(18.dp),
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            } else {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_folder),
+                                    contentDescription = "扫描目录收书",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                        IconButton(onClick = onSettings) {
                             Icon(
-                                painter = painterResource(R.drawable.ic_folder),
-                                contentDescription = "扫描目录收书",
+                                painter = painterResource(R.drawable.ic_settings),
+                                contentDescription = "设置",
                                 tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
-                    IconButton(onClick = onSettings) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_settings),
-                            contentDescription = "设置",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    }   // Row 结束（方屏一行布局）
-                }       // else 结束
-            }           // Surface 结束
+                }
+            }
 
             if (books.isEmpty()) {
                 Column(
@@ -173,7 +159,7 @@ fun LibraryScreen(
                     // 底部再留 76dp 让开右下角那个悬浮「＋」。
                     Modifier
                         .weight(1f)
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 84.dp),
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 92.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -192,9 +178,24 @@ fun LibraryScreen(
                     )
                 }
             } else {
-                // 圆屏 FAB 抬高了 10dp，列表底部留白同步加大，否则最后一行会被 FAB 压住
-                LazyColumn(contentPadding = PaddingValues(bottom = if (round) 92.dp else 76.dp)) {
-                    items(books, key = { it.id }) { b ->
+                // 圆屏 FAB 抬高了，列表底部留白同步加大，否则最后一行会被 FAB 压住
+                LazyColumn(
+                    // weight(1f) 让列表只占标题之外的剩余高度，不再撑满整屏和 FAB 重叠
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(bottom = if (round) 96.dp else 76.dp)
+                ) {
+                    itemsIndexed(books, key = { _, b -> b.id }) { index, b ->
+                        /*
+                         * 圆屏：每一行按它在屏幕上的高度**单独**算左右内缩。
+                         *
+                         * 这就是圆屏适配的核心 —— 不是整页一个 padding，而是
+                         * 越靠上/下的行左右收得越多，让卡片边缘始终贴着圆弧内侧。
+                         * 固定 padding 做不到这点：给多了中间几行白白变窄，
+                         * 给少了顶部的行角上还是被切。
+                         */
+                        // 圆屏：卡片沿中轴排布，两侧各留 20dp。
+                        // 不按行动态收窄 —— 表盘中部本来就宽，动态算反而把书名挤成省略号。
+                        val rowInset = if (round) 20.dp else 10.dp
                         BookRow(
                             book = b,
                             cover = covers[b.id],
@@ -202,27 +203,34 @@ fun LibraryScreen(
                             onClick = { onOpen(b) },
                             onLongClick = { onDelete(b) },
                             // 图书增删时列表项有出现/移动/消失动画
-                            modifier = Modifier.animateItem(
-                                fadeInSpec = tween(220),
-                                placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                                fadeOutSpec = tween(160)
-                            )
+                            modifier = Modifier
+                                .padding(horizontal = rowInset)
+                                .animateItem(
+                                    fadeInSpec = tween(220),
+                                    placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                    fadeOutSpec = tween(160)
+                                )
                         )
                     }
                 }
             }
         }
 
+        /*
+         * 圆屏：加号放到正下方中轴。
+         *
+         * 之前贴右下角，45° 方向圆弧会把它切掉一半，为了躲弧线只能缩到 40dp ——
+         * 结果手指几乎点不中（用户反馈只能用触控笔勉强点到）。
+         * 表盘正下方是整圆最宽处，把加号放这儿可以用标准 56dp 大按钮，
+         * 既完整落在圆内，拇指也点得中。方屏保持右下角不变。
+         */
         FloatingActionButton(
             onClick = onImport,
-            // 圆屏：底部两角往里收，FAB 贴右下会盖住书名和进度条（实测「已读 60%」被遮）。
-            // 往中间挪一点、再抬高一点，既在圆内也不压内容。
-            // 圆屏：缩小到 48dp 并贴到右下角 —— 全尺寸 FAB 会盖住卡片的书名与进度条
-            // （实测「TXT · 60 章 · 已读 60%」被遮掉一半）。
-            modifier = Modifier.align(Alignment.BottomEnd)
-                .then(if (round) Modifier.size(48.dp) else Modifier)
-                .padding(end = if (round) 18.dp else 16.dp,
-                         bottom = if (round) 18.dp else 16.dp),
+            modifier = if (round) {
+                Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp).size(56.dp)
+            } else {
+                Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)
+            },
             containerColor = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             shape = RoundedCornerShape(16.dp)

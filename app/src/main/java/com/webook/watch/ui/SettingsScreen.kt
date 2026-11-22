@@ -178,9 +178,9 @@ fun SettingsScreen(
                     android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S ->
                         "这台设备是 Android 11 及以下，系统没有动态取色，开关不会生效。默认配色已经够用。"
                     dynamicCol ->
-                        "已开启。配色由系统按壁纸计算 —— 若出现字看不清、颜色怪异，关掉即可恢复。"
+                        "配色跟随壁纸；看不清就关掉"
                     else ->
-                        "默认用内置配色，各个系统上表现一致。开启后会跟随壁纸变色，但部分手表的取色对比度较差。"
+                        "跟随壁纸变色，部分手表对比度较差"
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -203,7 +203,7 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        "字和按钮整体放大缩小。手表系统报的 DPI 往往偏高，界面会显得很小，调大一档就舒服了。",
+                        "字和按钮整体缩放",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 3.dp)
@@ -338,10 +338,8 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.titleSmall
                     )
                     Text(
-                        "开关打开后，屏幕左边缘 24dp 不再触发「划一下就返回」，这段滑动会交给应用 —— " +
-                            "阅读时从最左边划就是翻页，不会误退出。\n" +
-                            "少数手表把返回手势做在系统底层、不理会应用的声明，这种需要在手表" +
-                            "「设置 → 手势 / 系统导航」里关掉侧滑返回；下面的按钮可以直接打开系统设置。",
+                        "关闭左边缘返回，阅读时从左划可翻页；\n" +
+                            "若仍触发返回，需到系统设置里关闭手势。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 6.dp)
@@ -367,8 +365,7 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        "书架上的文件夹按钮会扫这些目录，把没导入过的电子书收进来。多个目录用分号隔开；" +
-                            "留空则只扫 Download / Downloads / Books。",
+                        "书架文件夹按钮扫这些目录；分号分隔，留空扫 Download / Books",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 3.dp)
@@ -585,7 +582,7 @@ private fun openBilibili(ctx: android.content.Context) {
     }.isSuccess
     if (!ok) {
         runCatching {
-            android.widget.Toast.makeText(ctx, "没有可用的浏览器，请手动打开 $url", android.widget.Toast.LENGTH_LONG).show()
+            android.widget.Toast.makeText(ctx, "没有浏览器，请手动打开 $url", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 }
