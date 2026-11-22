@@ -151,91 +151,90 @@ fun LibraryScreen(
                 }
             }
 
-            if (books.isEmpty()) {
-                Column(
-                    // ⚠️ 必须用 weight(1f)，不能 fillMaxSize()：
-                    // 标题栏已经占掉一截，fillMaxSize 会让这一栏再撑满整屏高度，
-                    // 父 Column 装不下就把底部裁掉 —— 空态那两行说明文字会被切掉半行（实测过）。
-                    // 底部再留 76dp 让开右下角那个悬浮「＋」。
-                    Modifier
-                        .weight(1f)
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 92.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_auto_stories), contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(40.dp)
-                    )
-                    Text("书架上还没有书", style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(top = 10.dp))
-                    Text(
-                        "点右下角的 ＋ 从设备里导入电子书\n支持 TXT / EPUB / MOBI / AZW / HTML",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
+            /*
+             * 整页一条可滚动列表：第一项是整行的「导入图书」，后面才是书。
+             *
+             * 之前用悬浮 FAB，在圆屏上要么被弧线切、要么缩到手指点不中。
+             * 做成列表行之后：点击区有整行宽、跟着列表滚、永远不会被裁切，
+             * 而且空态和满书架时入口位置一致，不用从头找加号。
+             */
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(
+                    horizontal = if (round) 20.dp else 10.dp,
+                    vertical = 6.dp
+                )
+            ) {
+                // 导入行：整行可点，56dp 高，和书卡片同宽
+                item(key = "import-row") {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        onClick = onImport,
+                        modifier = Modifier.fillMaxWidth().height(56.dp).padding(vertical = 3.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_add),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Text(
+                                "导入图书",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.padding(start = 12.dp)
+                            )
+                        }
+                    }
                 }
-            } else {
-                // 圆屏 FAB 抬高了，列表底部留白同步加大，否则最后一行会被 FAB 压住
-                LazyColumn(
-                    // weight(1f) 让列表只占标题之外的剩余高度，不再撑满整屏和 FAB 重叠
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(bottom = if (round) 96.dp else 76.dp)
-                ) {
+
+                if (books.isEmpty()) {
+                    item(key = "empty") {
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = 28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_auto_stories),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(40.dp)
+                            )
+                            Text(
+                                "书架上还没有书",
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(top = 10.dp)
+                            )
+                            Text(
+                                "点上面的导入图书，选一种方式把书放进来",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 8.dp)
+                            )
+                        }
+                    }
+                } else {
                     itemsIndexed(books, key = { _, b -> b.id }) { index, b ->
-                        /*
-                         * 圆屏：每一行按它在屏幕上的高度**单独**算左右内缩。
-                         *
-                         * 这就是圆屏适配的核心 —— 不是整页一个 padding，而是
-                         * 越靠上/下的行左右收得越多，让卡片边缘始终贴着圆弧内侧。
-                         * 固定 padding 做不到这点：给多了中间几行白白变窄，
-                         * 给少了顶部的行角上还是被切。
-                         */
-                        // 圆屏：卡片沿中轴排布，两侧各留 20dp。
-                        // 不按行动态收窄 —— 表盘中部本来就宽，动态算反而把书名挤成省略号。
-                        val rowInset = if (round) 20.dp else 10.dp
                         BookRow(
                             book = b,
                             cover = covers[b.id],
                             progress = (progress[b.id] ?: 0f).coerceIn(0f, 1f),
                             onClick = { onOpen(b) },
                             onLongClick = { onDelete(b) },
-                            // 图书增删时列表项有出现/移动/消失动画
-                            modifier = Modifier
-                                .padding(horizontal = rowInset)
-                                .animateItem(
-                                    fadeInSpec = tween(220),
-                                    placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                                    fadeOutSpec = tween(160)
-                                )
+                            modifier = Modifier.animateItem(
+                                fadeInSpec = tween(220),
+                                placementSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                                fadeOutSpec = tween(160)
+                            )
                         )
                     }
                 }
             }
-        }
-
-        /*
-         * 圆屏：加号放到正下方中轴。
-         *
-         * 之前贴右下角，45° 方向圆弧会把它切掉一半，为了躲弧线只能缩到 40dp ——
-         * 结果手指几乎点不中（用户反馈只能用触控笔勉强点到）。
-         * 表盘正下方是整圆最宽处，把加号放这儿可以用标准 56dp 大按钮，
-         * 既完整落在圆内，拇指也点得中。方屏保持右下角不变。
-         */
-        FloatingActionButton(
-            onClick = onImport,
-            modifier = if (round) {
-                Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp).size(56.dp)
-            } else {
-                Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 16.dp)
-            },
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Icon(painter = painterResource(R.drawable.ic_add), contentDescription = "导入")
         }
     }
 }
