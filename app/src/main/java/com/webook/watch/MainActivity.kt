@@ -78,6 +78,7 @@ import com.webook.watch.parser.SUPPORTED_EXT
 import com.webook.watch.tts.Speaker
 import com.webook.watch.ui.FmEntry
 import com.webook.watch.ui.ImportScreen
+import com.webook.watch.ui.ImportMethodsScreen
 import com.webook.watch.ui.CircleSafeArea
 import com.webook.watch.ui.ComicDetect
 import com.webook.watch.ui.ComicReader
@@ -113,6 +114,8 @@ class MainActivity : ComponentActivity() {
     // 在属性初始化阶段还没赋值，会抛 "lateinit property settings has not been initialized"
     // 并直接崩溃在 Activity 构造期。首次启动的判断挪到 onCreate 里做。
     private var screen by mutableStateOf("library")
+    /** 「导入方式」页是从哪儿点进来的：import=导入页，其他=书架加号。决定返回去哪儿 */
+    private var methodsFrom by mutableStateOf("library")
     private var books by mutableStateOf(listOf<BookMeta>())
     private val covers = mutableStateListOf<Pair<String, Bitmap?>>()
     private var progress by mutableStateOf(mapOf<String, Float>())
@@ -242,8 +245,14 @@ class MainActivity : ComponentActivity() {
     private fun openAppDir() {
         val d = appBooksDir()
         if (dirStack.lastOrNull()?.absolutePath != d.absolutePath) dirStack.add(d)
-        if (dirStack.size > 1) storageBlocked = false
+        // 专属文件夹永远可读（应用自己的目录，不经过分区存储），
+        // 所以这里无条件清掉"被锁"状态 —— 不清的话导入页会顶一条红色横幅说
+        // "系统没放行读取存储"，而用户明明就在那个不需要权限的目录里。
+        storageBlocked = false
         refreshDir()
+        // ⚠️ 必须切回导入页：这个函数现在会被「导入方式」页的卡片调用，
+        // 只改 dirStack 不换页的话，用户点完卡片界面纹丝不动 —— 看起来像按钮失灵。
+        screen = "import"
         if (entries.isEmpty()) toast("专属文件夹是空的 —— 用数据线或手机端工具把书放进去")
     }
 
@@ -354,6 +363,9 @@ class MainActivity : ComponentActivity() {
         speaker.rate = settings.speechRate
         // 首次启动：先进引导页认屏幕，选完才进书架
         if (!settings.firstRunDone) screen = "firstrun"
+        // 调试用：adb shell am start --es screen import 可直接跳到指定页面。
+        // 只在 debug 构建里生效（release 里下面这行会被 R8 当成常量折叠掉）。
+        intent?.getStringExtra("screen")?.takeIf { it.isNotBlank() }?.let { screen = it }
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
         applySystemSettings()        // 常亮 / 状态栏 / 屏幕方向 / 亮度
@@ -477,7 +489,10 @@ class MainActivity : ComponentActivity() {
                                 onOpen = { openBook(it) },
                                 onDelete = { meta -> confirm = Confirm("删除《${meta.title}》？",
                                     "图书内容和阅读进度将一并删除，且无法恢复。") { store.remove(meta.id); refresh() } },
-                                onImport = { screen = "import"; ensureStoragePermission() },
+                                // 加号 → 先选导入方式（手机传书 / 从设备导入 / 链接导入），
+                                // 再由各自入口进文件选择器。不再是直接甩一个根目录文件列表 ——
+                                // 那样用户看到一堆系统目录，根本不知道该点哪儿。
+                                onImport = { screen = "importmethods" },
                                 onScan = { scanAndCollect() },
                                 scanning = scanning,
                                 onSettings = { screen = "settings" },
@@ -589,12 +604,13 @@ class MainActivity : ComponentActivity() {
                                 currentPath = dirStack.lastOrNull()?.absolutePath ?: storageRoot().absolutePath,
                                 entries = entries,
                                 canGoUp = dirStack.size > 1,
-                                hasPermission = storageGranted,
+                                // 专属文件夹（应用自己的 /Android/data 目录）不需要任何权限。
+                                // 这里若死板地传 storageGranted，用户明明在能读的目录里，
+                                // 界面却要求"授予存储权限" —— 而他点了也没用。
+                                hasPermission = storageGranted ||
+                                    (dirStack.lastOrNull()?.absolutePath?.contains("/Android/data/") == true),
                                 needAllFiles = needAllFiles,
                                 storageBlocked = storageBlocked,
-                                urlJob = urlJob,
-                                onUrlImport = { startUrlImport(it) },
-                                onUrlDismiss = { urlJob = null },
                                 onOpen = { e ->
                                     if (e.file.isDirectory) { dirStack.add(e.file); refreshDir() }
                                     else if (e.isBook) importFile(e.file)
@@ -608,11 +624,29 @@ class MainActivity : ComponentActivity() {
                                 // SAF：把系统支持的电子书类型都列出来，别把用户的书藏掉
                                 onOpenDocument = { openDocumentSafely() },
                                 onImportLocal = { openImportLocal() },
-                                // 手机传书：局域网小网页，手机浏览器把书推进来
+                                // 手机传书是否在跑（入口行用来提示）
+                                wifiOn = wifiServer != null,
+                                onOpenMethods = { methodsFrom = "import"; screen = "importmethods" }
+                            )
+
+                            // 导入方式独立页：手机传书 / 从设备导入 / 链接导入
+                            "importmethods" -> ImportMethodsScreen(
                                 wifiOn = wifiServer != null,
                                 wifiInfo = wifiInfo,
                                 onWifiToggle = { toggleWifiTransfer() },
-                                onShowQr = { if (wifiInfo != null) screen = "qr" }
+                                onShowQr = { if (wifiInfo != null) screen = "qr" },
+                                onImportLocal = { openImportLocal() },
+                                onBrowseStorage = {
+                                    ensureStoragePermission()
+                                    screen = "import"
+                                },
+                                urlJob = urlJob,
+                                onUrlImport = { startUrlImport(it) },
+                                onUrlDismiss = { urlJob = null },
+                                onBack = {
+                                    screen = if (methodsFrom == "import") "import" else "library"
+                                    if (screen == "import") ensureStoragePermission()
+                                }
                             )
 
                             // 二维码页：全屏只放一个码，手机扫一下就能打开传书页面
@@ -844,6 +878,11 @@ class MainActivity : ComponentActivity() {
             "pickdir" -> { screen = "settings" }
             // 二维码页是从导入页点进来的，返回就回导入页（不是回书架）
             "qr" -> { screen = "import" }
+            // 导入方式页可能来自书架加号，也可能来自导入页的上方入口
+            "importmethods" -> {
+                screen = if (methodsFrom == "import") "import" else "library"
+                if (screen == "library") refresh()
+            }
             else -> {
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt < 2000) finish() else { lastBackAt = now; toast("再按一次退出") }
@@ -915,7 +954,10 @@ class MainActivity : ComponentActivity() {
             .map { FmEntry(it.name ?: "?", it.isDirectory, it, !it.isDirectory && isBookFile(it.name)) }
             .sortedWith(compareBy({ !it.isDir }, { it.name.lowercase() }))
         // 根目录读到空 → 不是真的空，是系统没放行（真机根目录至少有 Android/ 等）
-        storageBlocked = dirStack.size == 1 && entries.isEmpty()
+        // 专属文件夹（/Android/data/...）是应用自己的目录，不受分区存储限制，
+        // 空就是真的空，不能判成"被系统锁住"。
+        val inOwnDir = dir.absolutePath.contains("/Android/data/")
+        storageBlocked = !inOwnDir && dirStack.size == 1 && entries.isEmpty()
     }
 
     /**

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -58,10 +59,6 @@ fun ImportScreen(
     hasPermission: Boolean,
     needAllFiles: Boolean,
     storageBlocked: Boolean,
-    /** 链接导入的进行中状态 / 失败原因（null = 空闲） */
-    urlJob: com.webook.watch.data.UrlImport.Job?,
-    onUrlImport: (String) -> Unit,
-    onUrlDismiss: () -> Unit,
     onOpen: (FmEntry) -> Unit,
     onGoUp: () -> Unit,
     onBack: () -> Unit,
@@ -72,79 +69,89 @@ fun ImportScreen(
     onOpenDocument: () -> Unit,
     /** 从设备导入：先试 SAF，不可用/空壳时自动落到专属文件夹 */
     onImportLocal: () -> Unit,
-    /** 手机传书是否在跑 / 要显示的访问地址 / 开关 / 弹出二维码 */
+    /** 手机传书是否在跑（用于入口行提示） */
     wifiOn: Boolean,
-    wifiInfo: String?,
-    onWifiToggle: () -> Unit,
-    onShowQr: () -> Unit
+    /** 进「导入方式」独立页 */
+    onOpenMethods: () -> Unit
 ) {
-    var urlText by remember { mutableStateOf("") }
-    var urlExpanded by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize()) {
+        /*
+         * 标题栏：只放「返回 + 标题 + 上级」三个位置。
+         *
+         * ⚠️ 以前这里塞了 4 个纯图标按钮（从设备导入 / 手机传书 / 链接导入 / 上级），
+         * 问题很明显：
+         *   1. **全靠猜** —— 文档图标代表"从设备导入"、播放图标代表"手机传书"、
+         *      加号代表"链接导入"，三者都对不上直觉，手表上又没地方放 tooltip；
+         *   2. 450px 宽的屏放 5 个 44dp 图标会被挤出去，最右那个只剩半个、点不到；
+         *   3. 导入方式混在标题栏里，和下面的文件列表没有视觉分区，看着乱。
+         *
+         * 现在：标题栏回归它该干的（返回 + 标题 + 上级），
+         * 三种导入方式改成**带图标和说明的卡片**，放在列表上方的可滚动区里。
+         */
         Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            M3IconAction(R.drawable.ic_arrow_back, "返回", onBack)
-            Text(
-                "导入图书", style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(start = 2.dp).weight(1f),
-                maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-            // 从设备导入：一条路走到黑 —— 先试系统选择器，Wear OS 上它是个空壳，
-            // 那就自动落到「专属文件夹」。
-            // ⚠️ 为什么合成一个图标：450px 宽的标题栏放 5 个 44dp 图标就挤出去了，
-            // 实测最右那个会被裁掉一半（点不到）。合并后 4 个刚好。
-            M3IconAction(
-                R.drawable.ic_description, "从设备导入", onImportLocal,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // 手机传书：手表开一个小网页，手机浏览器打开就能把书推进来 —— 不用数据线、不用权限。
-            M3IconAction(
-                R.drawable.ic_autoplay, "手机传书", onWifiToggle,
-                tint = if (wifiOn) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // 链接导入：列表有内容时这张卡片会收起来，入口就靠这个 ＋（展开后卡片会自己出来）
-            M3IconAction(
-                R.drawable.ic_add, "链接导入", { urlExpanded = !urlExpanded },
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // 返回上一级：固定在标题栏，不在列表里 —— 目录为空时也一定点得到
-            M3IconAction(R.drawable.ic_arrow_upward, "返回上级目录", onGoUp, enabled = canGoUp)
-        }
-        }
-        // 当前路径（可滚动截断，让用户知道在哪儿）
-        Text(
-            currentPath, style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 12.dp).padding(bottom = 4.dp),
-            maxLines = 1, overflow = TextOverflow.Ellipsis
-        )
-
-        // 手机传书：开启后显示地址卡片。点卡片弹出二维码（屏幕上放不下码 + 列表，所以独立成页）。
-        if (wifiOn && wifiInfo != null) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                onClick = onShowQr,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 3.dp)
+            Row(
+                Modifier.fillMaxWidth().padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                    Text(
-                        "手机扫码传书（点这里）",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    Text(
-                        wifiInfo,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(top = 1.dp)
-                    )
-                }
+                M3IconAction(R.drawable.ic_arrow_back, "返回", onBack)
+                Text(
+                    "导入图书", style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 2.dp).weight(1f),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+                // 返回上一级：固定在标题栏，不在列表里 —— 目录为空时也一定点得到
+                M3IconAction(R.drawable.ic_arrow_upward, "返回上级目录", onGoUp, enabled = canGoUp)
             }
         }
 
+        /*
+         * 导入方式：三张卡片，每张都有图标 + 标题 + 一句说明。
+         *
+         * 为什么做成卡片而不是标题栏图标：手表上没有 tooltip、没有长按提示，
+         * 纯图标等于让用户猜。而导入是低频高风险操作（选错就白折腾），
+         * 值得多占一行把话说清楚。
+         *
+         * 顺序按「手表上有多好用」排：
+         *   手机传书（最省事，不用线不用权限）
+         *   → 从设备导入（有文件管理器时最好用，Wear OS 会自动落到专属文件夹）
+         *   → 链接导入（需要一个能直下的网址）
+         */
+        // 当前路径：一行截断，用户得知道自己现在在哪个目录
+        Text(
+            currentPath,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 12.dp).padding(top = 2.dp, bottom = 2.dp),
+            maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+
+        // 入口行：点进「导入方式」独立页。
+        // 不在这里就地展开 —— 225dp 高的屏上展开后文件列表一行都不剩（实测）。
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            onClick = onOpenMethods,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp).padding(bottom = 4.dp)
+        ) {
+            Row(
+                Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "其它导入方式",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    if (wifiOn) "传书已开启" else "手机传书 · 链接",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (wifiOn) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
 
         // Android 11+ 分区存储：没开「所有文件访问」时，系统只让看媒体文件，电子书全部被隐藏。
         // ⚠️ 这块在 Wear OS 上是**纯误导**（那个开关根本不存在），而且 225dp 高的屏幕上
@@ -152,14 +159,18 @@ fun ImportScreen(
         // 所以：不再占页面空间，只在列表里以一行条目形式存在（见空态区）。
         // 这里保留状态但完全折叠，真正的引导写在空态文案里。
 
-        // 安卓 10 上 targetSdk≥29：分区存储会把外部存储整个挡住，连根目录都读不到
-        if (storageBlocked && !needAllFiles) {
+        // 安卓 10 上 targetSdk≥29：分区存储会把外部存储整个挡住，连根目录都读不到。
+        // ⚠️ 但在**专属文件夹**里这条提示是错的：那个目录本来就不需要任何权限，
+        // 而且文案里"可以改用下面的专属文件夹"正是用户当前所在的位置 —— 纯误导。
+        val inAppDir = currentPath.contains("/Android/data/")
+        if (storageBlocked && !needAllFiles && !inAppDir) {
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = MaterialTheme.colorScheme.errorContainer,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
+                    .heightIn(max = 88.dp)   // 225dp 的屏上，不限制高度会把文件列表整块挤出去
             ) {
-                Column(Modifier.padding(11.dp)) {
+                Column(Modifier.verticalScroll(rememberScrollState()).padding(9.dp)) {
                     Text(
                         "系统没放行读取存储",
                         style = MaterialTheme.typography.labelMedium,
@@ -177,23 +188,6 @@ fun ImportScreen(
                     }
                 }
             }
-        }
-
-        /* 链接导入：填一个能直接下载的 http(s) 直链，书就落到书架里。
-           卡片默认折叠 —— 320x360 的屏上，展开的输入框会把下面的本地文件列表挤没。
-           ⚠️ 只在**折叠状态**下贴着列表上方显示；展开时必须整块让位（见下）。
-           更关键的是：225dp 高的 Wear OS 屏上，即使折叠的卡片也会吃掉一行文件的位置，
-           所以它在列表为空时才常驻，列表有内容时收成标题栏那枚 ＋ 图标。 */
-        if (entries.isEmpty() || urlExpanded) {
-            UrlImportCard(
-                job = urlJob,
-                url = urlText,
-                expanded = urlExpanded,
-                onToggle = { urlExpanded = !urlExpanded },
-                onUrlChange = { urlText = it },
-                onStart = onUrlImport,
-                onDismiss = onUrlDismiss
-            )
         }
 
         when {
@@ -311,129 +305,7 @@ fun ImportScreen(
     }
 }
 
-/**
- * 链接导入卡片。
- *
- * 只做一件事：把用户填的 http(s) 直链下载成书。能不能下取决于那个链接本身 ——
- * 无痕窗口里不登录就能存成文件的链接，这里就能下；需要登录或验证码的，这里同样下不到。
- * 这里不做任何站点适配、不注入 Cookie，也不维护接口地址，详见 data/UrlImport.kt。
- */
-@Composable
-private fun UrlImportCard(
-    job: com.webook.watch.data.UrlImport.Job?,
-    url: String,
-    expanded: Boolean,
-    onToggle: () -> Unit,
-    onUrlChange: (String) -> Unit,
-    onStart: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)
-    ) {
-        Column(Modifier.padding(horizontal = 9.dp, vertical = 7.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onToggle() }
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_description),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(15.dp).padding(end = 5.dp)
-                )
-                Text(
-                    "链接导入",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    if (expanded) "−" else "＋",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(end = 2.dp)
-                )
-            }
-            // 折叠态下只留标题这一行（约 28dp），把整块屏幕让给下面的文件列表
-            if (!expanded && job == null) return@Column
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (job?.error != null) {
-                    Text(
-                        "关闭",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clickable { onDismiss() }
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
-                    )
-                }
-                Button(
-                    onClick = { onStart(url) },
-                    enabled = url.isNotBlank() && job == null,
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                    modifier = Modifier.height(28.dp)
-                ) {
-                    Text(
-                        if (job == null) "下载" else "下载中",
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-            }
-            OutlinedTextField(
-                value = url,
-                onValueChange = onUrlChange,
-                singleLine = true,
-                enabled = job == null,
-                placeholder = {
-                    Text("https:// 直链，如 xxx.epub", style = MaterialTheme.typography.labelSmall)
-                },
-                textStyle = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.fillMaxWidth().padding(top = 2.dp)
-            )
 
-            val err = job?.error
-            when {
-                err != null -> Text(
-                    "✗ $err",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 6.dp)
-                )
-
-                job != null -> {
-                    // 服务器没给 Content-Length 时 total=0，这时 progress 拿不到，就显示已下载了多少
-                    val frac = job.fraction
-                    LinearProgressIndicator(
-                        progress = { if (frac >= 0f) frac else 0f },
-                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                    )
-                    Text(
-                        if (frac >= 0f) {
-                            "${mb(job.read)} / ${mb(job.total)}"
-                        } else {
-                            "已下载 ${mb(job.read)}（服务器没给总大小）"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 3.dp)
-                    )
-                }
-
-                else -> Text(
-                    "只支持不需要登录、点开就能存成文件的直链",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 3.dp)
-                )
-            }
-        }
-    }
-}
 
 private fun mb(b: Long): String = when {
     // Locale.ROOT：这几个是纯数值展示，指定 Locale 才能避免
