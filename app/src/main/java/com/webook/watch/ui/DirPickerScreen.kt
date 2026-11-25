@@ -154,7 +154,7 @@ fun DirPickerScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "选好后，书架上的文件夹按钮会扫这一层",
+                    "选好后，书架文件夹按钮扫这一层",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)

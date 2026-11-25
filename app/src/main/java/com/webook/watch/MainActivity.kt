@@ -273,7 +273,7 @@ class MainActivity : ComponentActivity() {
             "*/*"
         )
         runCatching { openDocument.launch(mimes) }
-            .onFailure { toast("打不开文件选择器，请改用「专属文件夹」") }
+            .onFailure { toast("打不开文件选择器，请用专属文件夹") }
     }
 
     /**
@@ -316,7 +316,7 @@ class MainActivity : ComponentActivity() {
         val target = if (packageManager.resolveActivity(appPage, 0) != null) appPage
         else Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
         runCatching { startActivity(target); toast("打开「所有文件访问」开关后返回即可") }
-            .onFailure { toast("无法打开系统设置，请手动开启「所有文件访问」") }
+            .onFailure { toast("打不开系统设置，请手动开启「所有文件访问」") }
     }
 
     /** 进入导入页时调用：按系统版本走不同的授权路径 */
@@ -633,7 +633,7 @@ class MainActivity : ComponentActivity() {
                             "importmethods" -> ImportMethodsScreen(
                                 wifiOn = wifiServer != null,
                                 wifiInfo = wifiInfo,
-                                onWifiToggle = { toggleWifiTransfer() },
+                                onWifiToggle = { toggleWifiTransfer(thenOpenQr = true) },
                                 onShowQr = { if (wifiInfo != null) screen = "qr" },
                                 onImportLocal = { openImportLocal() },
                                 onBrowseStorage = {
@@ -676,7 +676,7 @@ class MainActivity : ComponentActivity() {
                                 onPickDir = { openDirPicker() },
                                 onOpenSystemSettings = {
                                     runCatching { startActivity(Intent(android.provider.Settings.ACTION_SETTINGS)) }
-                                        .onFailure { toast("打不开系统设置，请手动去「设置 → 手势」里关闭侧滑返回") }
+                                        .onFailure { toast("打不开系统设置，请手动到「设置 → 手势」关闭侧滑返回") }
                                 },
                                 onClearAll = { confirm = Confirm("清空全部数据？",
                                     "将删除书架上的所有图书、阅读进度与设置，且无法恢复。") { store.clearAll(); refresh() } },
@@ -1070,7 +1070,7 @@ class MainActivity : ComponentActivity() {
         val name = displayName(uri) ?: "book.${extHint(uri)}"
         val ext = name.substringAfterLast('.', "").lowercase()
         if (ext !in SUPPORTED_EXT) {
-            toast("这个文件不是电子书（.$ext）—— 支持 TXT / EPUB / MOBI / AZW / HTML")
+            toast("不支持 .$ext —— 可用 TXT / EPUB / MOBI / AZW / HTML")
             return
         }
         importing = name.substringBeforeLast('.')
@@ -1240,7 +1240,14 @@ class MainActivity : ComponentActivity() {
      * 手机上用自己熟悉的键盘和文件选择器，比在表盘上敲直链轻松得多。
      * 详见 [com.webook.watch.data.WifiTransfer] 的边界说明（只收上传、不暴露任何已有文件）。
      */
-    private fun toggleWifiTransfer() {
+    /**
+     * 开关手机传书。
+     *
+     * @param thenOpenQr 启动成功后是否直接进二维码页。
+     *   从「导入方式」点手机传书时传 true —— 用户点这一下就是想扫码，
+     *   以前要「点一下开启 → 再点一下卡片 → 才看到码」，白白多一步。
+     */
+    private fun toggleWifiTransfer(thenOpenQr: Boolean = false) {
         val running = wifiServer
         if (running != null) {
             running.stop()
@@ -1261,7 +1268,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (server == null) {
-            toast("开不起来 —— 手表可能没连上 WiFi")
+            toast("开不起来，手表可能没连 WiFi")
             return
         }
         wifiServer = server
@@ -1279,6 +1286,9 @@ class MainActivity : ComponentActivity() {
                 ?: ips.first()
             wifiQrUrl = "http://$best:${server.port}"
         }
+        // 开关是"一键扫码"：开完立刻把码亮出来，不要再让用户点第二次
+        if (thenOpenQr && wifiQrUrl != null) screen = "qr"
+        else if (thenOpenQr) toast("没拿到局域网地址，用下面的链接试试")
     }
 
     /** 二维码要编码的地址；没开服务时给个占位（正常情况下进不了这一页） */
@@ -1342,7 +1352,7 @@ class MainActivity : ComponentActivity() {
     private fun startUrlImport(raw: String) {
         val url = UrlImport.normalize(raw)
         if (url == null) {
-            toast("这个链接用不了 —— 只支持 http / https 开头的网址")
+            toast("只支持 http / https 开头的网址")
             return
         }
         if (importing != null || urlJob != null) { toast("正在导入，请稍候…"); return }
@@ -1441,7 +1451,7 @@ class MainActivity : ComponentActivity() {
                     if (store.list().size > before) okCount++
                 }
                 withContext(Dispatchers.Main) {
-                    toast("扫描完成：新收进 ${okCount} 本（共发现 ${fresh.size} 本）")
+                    toast("扫描完成：收进 ${okCount} 本，发现 ${fresh.size} 本")
                 }
             } finally {
                 withContext(Dispatchers.Main) { scanning = false }

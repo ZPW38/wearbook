@@ -176,7 +176,7 @@ fun SettingsScreen(
             Text(
                 when {
                     android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S ->
-                        "这台设备是 Android 11 及以下，系统没有动态取色，开关不会生效。默认配色已经够用。"
+                        "Android 11 及以下不支持动态取色，开关无效。"
                     dynamicCol ->
                         "配色跟随壁纸；看不清就关掉"
                     else ->
@@ -255,7 +255,7 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        "选一个规格，界面会被限制在该比例的黑框里居中显示 —— 用来在大屏设备上验证手表布局有没有被裁。",
+                        "限制界面比例并居中，用于在大屏上验证手表布局。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 3.dp)
@@ -314,7 +314,7 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Text(
-                            "音量上 = 上一章，音量下 = 下一章（仅在阅读页生效）",
+                            "音量上/下 = 上/下一章，仅阅读页生效",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 2.dp)

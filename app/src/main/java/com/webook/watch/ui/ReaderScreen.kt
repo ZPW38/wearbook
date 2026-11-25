@@ -152,6 +152,15 @@ fun ReaderScreen(
      * 行表还是旧章的。这期间如果照常上报进度，就会存下「新章号 + 旧章段落号」的脏档案，
      * 下次打开会跳到莫名其妙的位置。进度上报前拿它对一下，不一致就宁可不报。
      */
+    /*
+     * 定位是否已经完成。
+     *
+     * ⚠️ 没有它会丢阅读进度：打开书的头 500ms 里 pageIdx/lineAtTop 还是初始的 0，
+     * 而进度上报的防抖计时器已经跑起来了 —— 先把 (0,0) 写进存档，恢复逻辑再去读，
+     * 读到的就是 0。用户看到的就是「退出再进来，回到本章开头」。
+     * 同理 onDispose 在界面被收起时会 flush，那一刻位置也可能还没就位。
+     */
+    var restoreDone by remember { mutableStateOf(false) }
     var laidOutChapter by remember {
         mutableIntStateOf(if (chapterFitsBook(chapters, initialChapter)) initialChapter else 0)
     }
@@ -318,6 +327,7 @@ fun ReaderScreen(
                     }
                     else -> pageIdx = pageIdx.coerceIn(0, (ps.size - 1).coerceAtLeast(0))
                 }
+                restoreDone = true        // 定位已就位，从这里开始才允许上报进度
                 // 滑动模式：把"第几页"换算成"第几行"，然后滚到那儿
                 if (scrollMode) {
                     val targetLine = ps.getOrNull(pageIdx)?.start ?: 0
@@ -426,7 +436,8 @@ fun ReaderScreen(
                 hasNextChapter = chapterIdx < chapters.size - 1,
                 onNextChapter = { gotoChapter(chapterIdx + 1) },
                 onImageTap = { zoomImage = it },
-                bottomInset = statusH
+                bottomInset = statusH,
+                chapterKey = chapterIdx
             )
         }
 
@@ -519,7 +530,7 @@ fun ReaderScreen(
 
         // 用最新值包一层：Activity 进 onStop / 界面被收起时，调用的永远是"此刻"的位置
         val flushRef = rememberUpdatedState<() -> Unit>({
-            if (laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
+            if (restoreDone && laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
         })
         DisposableEffect(Unit) {
             onRegisterFlush { flushRef.value() }
@@ -531,7 +542,7 @@ fun ReaderScreen(
 
         LaunchedEffect(chapterIdx, pageIdx, paraNow, charNow, laidOutChapter) {
             delay(500)                    // 防抖：一路狂翻时只在停下来之后写一次
-            if (laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
+            if (restoreDone && laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
         }
 
         /* ---- 底部状态栏：百分比 + 时间，可在设置里关掉 ---- */
@@ -921,7 +932,16 @@ private fun ScrollBody(
     /** 点到了正文插图（放大查看） */
     onImageTap: (ImageRef) -> Unit = {},
     /** 底部状态栏占掉的高度，滚动内容要给它让位，否则最后一行被压住 */
-    bottomInset: Float = 0f
+    bottomInset: Float = 0f,
+    /**
+     * 当前章标识，只用来做列表 key。
+     *
+     * ⚠️ 没有它的时候 `itemsIndexed` 按**位置**复用：换章后 LazyColumn 会把
+     * 上一章的 firstVisibleItemIndex 原样保留下来，于是新章一进来就停在同一行号处
+     * —— 用户看到的就是「点下一章，进度还是本章那个百分比，还得手动往回滑」。
+     * 把章号拼进 key，换章时全部 key 都变，列表自然回到顶部。
+     */
+    chapterKey: Int = 0
 ) {
     val density = LocalDensity.current
     val chunks = remember(lines) { lines.chunked(SCROLL_CHUNK) }
@@ -980,7 +1000,8 @@ private fun ScrollBody(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = topPad, bottom = bottomPad)
         ) {
-            itemsIndexed(chunks) { ci, chunk ->
+            // key 里带章号：换章 → 全部 key 失效 → 从顶部重新布局，不会继承旧滚动位置
+            itemsIndexed(chunks, key = { ci, _ -> "${'$'}chapterKey-${'$'}ci" }) { ci, chunk ->
                 val startGlobal = ci * SCROLL_CHUNK
                 var h = 0f
                 chunk.forEachIndexed { j, ln ->

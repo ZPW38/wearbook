@@ -177,8 +177,7 @@ fun ImportScreen(
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
                     Text(
-                        "外部存储被锁，列不出文件。请改用专属文件夹" +
-                            "可以改用下面这个「专属文件夹」——那是本应用自己的目录，任何系统都允许读写。",
+                        "外部存储被锁，列不出文件。改用专属文件夹即可 —— 那是本应用自己的目录，不受限制。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.padding(top = 3.dp)
@@ -276,7 +275,7 @@ fun ImportScreen(
                 // Wear OS 上系统选择器是空壳、也访问不了系统文件，专属文件夹才是正路。
                 // 这段必须放在**可滚动的空态区**里：放上面会把文件列表挤成 0 高。
                 Text(
-                    "看不到系统文件？把书放进专属文件夹即可，无需权限",
+                    "看不到文件？放进专属文件夹即可，无需权限",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 10.dp, start = 6.dp, end = 6.dp)

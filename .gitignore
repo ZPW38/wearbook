@@ -26,3 +26,10 @@ local.properties
 
 # ---- 构建号的原子写临时文件（构建被中断时会留下）----
 build-number.txt.tmp
+
+# DrawAI 视频工程与画布（体积大、可重建，不进仓库）
+.drawai-motion/
+.drawai-cache/
+promo.drawai
+promo.drawai.media/
+promo-assets/

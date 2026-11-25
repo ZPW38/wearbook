@@ -629,7 +629,7 @@ fun SpeakPanel(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
             ) {
                 Text(
-                    "这台设备没有可用的 TTS 引擎，朗读可能没有声音",
+                    "本机没有 TTS 引擎，朗读可能没声音",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onErrorContainer,
                     modifier = Modifier.padding(8.dp)
@@ -668,7 +668,7 @@ fun SpeakPanel(
             }
         }
         Text(
-            "朗读：读完本页会自动翻到下一页；返回书架或退出会自动停止。",
+            "读完本页自动翻下一页，退出自动停止。",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 14.dp)

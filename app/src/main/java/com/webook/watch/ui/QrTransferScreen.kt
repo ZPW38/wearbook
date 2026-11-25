@@ -51,7 +51,7 @@ fun QrTransferScreen(
             // 只有地址超过 42 字节才会走到这里（正常局域网地址最长约 29 字节）。
             // 与其画一个扫不出来的码，不如明确告诉用户怎么办。
             Text(
-                "地址太长，画不出二维码\n请在手机上手动输入下面的地址",
+                "地址太长，请手动输入下面的地址",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center
