@@ -574,7 +574,14 @@ fun ReaderScreen(
         }
 
         LaunchedEffect(chapterIdx, pageIdx, paraNow, charNow, laidOutChapter) {
-            delay(500)                    // 防抖：一路狂翻时只在停下来之后写一次
+            /*
+             * 防抖时长按模式分：
+             * · 滑动模式 500ms —— lineAtTop 每滚一点就变，必须压住写入频率；
+             * · 翻页模式 120ms —— 翻页是离散动作、频率低，写太快没代价。
+             *   原来统一 500ms，实测"翻一页后立刻杀进程"会丢掉那一翻（回到上一页），
+             *   缩短后退让窗口小得多，而连续狂翻仍有 120ms 合并。
+             */
+            delay(if (scrollMode) 500L else 120L)
             if (restoreDoneChapter == chapterIdx && laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
         }
 
