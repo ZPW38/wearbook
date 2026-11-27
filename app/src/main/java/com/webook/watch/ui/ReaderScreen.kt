@@ -58,6 +58,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -160,7 +162,21 @@ fun ReaderScreen(
      * 读到的就是 0。用户看到的就是「退出再进来，回到本章开头」。
      * 同理 onDispose 在界面被收起时会 flush，那一刻位置也可能还没就位。
      */
-    var restoreDone by remember { mutableStateOf(false) }
+    /*
+     * 哪一章已经完成定位。不能只用一个布尔：ReaderScreen 可能先进旧章节、再换成
+     * 存档里的章节（两次组合共用同一批 remember），布尔在第一次就被置 true，
+     * 于是第二次的 0 位置被当成"已就位"写进存档 —— 章内位置依旧是丢的。
+     */
+    var restoreDoneChapter by remember { mutableStateOf(-1) }
+    /**
+     * 待执行的滚动目标行号。
+     *
+     * 布局算完当场调 scrollToItem 是没用的：那一刻组合还没把新章的 items 换上去，
+     * 紧接着新 items 带着全新 key 落地，LazyColumn 找不到可锚定的旧 key，
+     * 就把位置重置回 0 —— 章内阅读位置就是这么丢的。
+     * 改成先记下来，交给 ScrollBody 在布局完成后再滚。
+     */
+    var pendingScrollLine by remember { mutableStateOf<Int?>(null) }
     var laidOutChapter by remember {
         mutableIntStateOf(if (chapterFitsBook(chapters, initialChapter)) initialChapter else 0)
     }
@@ -310,7 +326,22 @@ fun ReaderScreen(
                 // 来自不同的章）就丢掉它，退回页码恢复，免得跳到书中部。
                 val para = pendingPara?.takeIf { paraFitsChapter(chapters, chapterIdx, it) }
                 val pg = pendingPage
-                val restore = pendingRestore?.takeIf { paraFitsChapter(chapters, chapterIdx, it.first) } ?: anchor
+                /*
+                 * 恢复位置有三个来源，按优先级：
+                 *   1. pendingRestore：本次会话里由目录/书签/搜索下发的临时指令；
+                 *   2. initialPara：从存档带进来的续读位置 —— **必须留作兜底**。
+                 *      ReaderScreen 有可能被组合两次（先进旧章节、进度加载完再换成正确的章），
+                 *      pendingRestore 在第一次就已被消费掉，第二次进来它是 null，
+                 *      没有这条兜底，章内阅读位置就丢了，只剩章首。
+                 *   3. anchor：同章内重排（改字号/行距）时把读者放回原处。
+                 */
+                val fromSaved =
+                    if (restoreDoneChapter != chapterIdx && chapterIdx == initialChapter && initialPara >= 0 &&
+                        paraFitsChapter(chapters, chapterIdx, initialPara)
+                    ) initialPara to initialCharStart else null
+                val restore = pendingRestore?.takeIf { paraFitsChapter(chapters, chapterIdx, it.first) }
+                    ?: fromSaved
+                    ?: anchor
                 pendingPara = null
                 pendingRestore = null
                 when {
@@ -327,12 +358,12 @@ fun ReaderScreen(
                     }
                     else -> pageIdx = pageIdx.coerceIn(0, (ps.size - 1).coerceAtLeast(0))
                 }
-                restoreDone = true        // 定位已就位，从这里开始才允许上报进度
+                restoreDoneChapter = chapterIdx   // 本章定位就位，之后才允许上报
                 // 滑动模式：把"第几页"换算成"第几行"，然后滚到那儿
                 if (scrollMode) {
                     val targetLine = ps.getOrNull(pageIdx)?.start ?: 0
                     lineAtTop = targetLine
-                    scroller.scrollToItem(targetLine / SCROLL_CHUNK, 0)
+                    pendingScrollLine = targetLine      // 等布局落地后再滚（见状态定义处）
                 }
             }
         }
@@ -437,7 +468,9 @@ fun ReaderScreen(
                 onNextChapter = { gotoChapter(chapterIdx + 1) },
                 onImageTap = { zoomImage = it },
                 bottomInset = statusH,
-                chapterKey = chapterIdx
+                chapterKey = chapterIdx,
+                pendingScrollLine = pendingScrollLine,
+                onScrollApplied = { pendingScrollLine = null }
             )
         }
 
@@ -530,7 +563,7 @@ fun ReaderScreen(
 
         // 用最新值包一层：Activity 进 onStop / 界面被收起时，调用的永远是"此刻"的位置
         val flushRef = rememberUpdatedState<() -> Unit>({
-            if (restoreDone && laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
+            if (restoreDoneChapter == chapterIdx && laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
         })
         DisposableEffect(Unit) {
             onRegisterFlush { flushRef.value() }
@@ -542,7 +575,7 @@ fun ReaderScreen(
 
         LaunchedEffect(chapterIdx, pageIdx, paraNow, charNow, laidOutChapter) {
             delay(500)                    // 防抖：一路狂翻时只在停下来之后写一次
-            if (restoreDone && laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
+            if (restoreDoneChapter == chapterIdx && laidOutChapter == chapterIdx) onProgress(chapterIdx, pageIdx, paraNow, charNow, fracNow)
         }
 
         /* ---- 底部状态栏：百分比 + 时间，可在设置里关掉 ---- */
@@ -941,10 +974,45 @@ private fun ScrollBody(
      * —— 用户看到的就是「点下一章，进度还是本章那个百分比，还得手动往回滑」。
      * 把章号拼进 key，换章时全部 key 都变，列表自然回到顶部。
      */
-    chapterKey: Int = 0
+    chapterKey: Int = 0,
+    /** 待滚动到的目标行号（布局完成后执行一次） */
+    pendingScrollLine: Int? = null,
+    /** 滚完回调，用来清掉 pending */
+    onScrollApplied: () -> Unit = {}
 ) {
     val density = LocalDensity.current
     val chunks = remember(lines) { lines.chunked(SCROLL_CHUNK) }
+
+    LaunchedEffect(lines, pendingScrollLine, chapterKey) {
+        val target = pendingScrollLine ?: return@LaunchedEffect
+        val idx = (target / SCROLL_CHUNK).coerceAtLeast(0)
+        /*
+         * 必须等列表**真的完成测量**再滚，不能只等一帧。
+         *
+         * 新章的 items 带着全新 key 落地，LazyColumn 手上一帧还只有很短的旧内容
+         * （日志里 lines=1），这时 scrollToItem(8) 会被夹到 0；
+         * 等 items 装满后它又停在 0 —— 章内位置就这么丢了。
+         * snapshotFlow 读 layoutInfo.totalItemsCount，凑够目标项再滚一次最稳。
+         */
+        snapshotFlow { scroller.layoutInfo.totalItemsCount }
+            .first { it > idx }
+        /*
+         * 光 scrollToItem(idx, 0) 不够 —— 那只是滚到「这一块的第 0 行」。
+         * 一个 chunk 装 SCROLL_CHUNK 行，目标行常落在块中间，offset 给 0
+         * 就等于回到块首、也就是章首，阅读位置照样丢。
+         * 这里把块内前几行的高度累加出来当 offset 用。
+         */
+        val startInChunk = idx * SCROLL_CHUNK
+        var offsetPx = 0f
+        for (gi in startInChunk until target.coerceAtMost(lines.size)) {
+            val ln = lines.getOrNull(gi) ?: break
+            if (gi > 0 && ln.paraStart) offsetPx += paraGapPx
+            offsetPx += ln.height(lineHeightPx)
+        }
+        scroller.scrollToItem(idx, offsetPx.toInt())
+        withFrameNanos { }
+        onScrollApplied()
+    }
     val topPad = with(density) { padY.toDp() }
     val bottomPad = with(density) { (padY + bottomInset).toDp() }
 
