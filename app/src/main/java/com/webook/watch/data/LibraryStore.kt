@@ -23,6 +23,16 @@ class LibraryStore(private val ctx: Context) {
     private val progressFile get() = File(root, "progress.json")
     private val bookmarkFile get() = File(root, "bookmarks.json")
 
+    /**
+     * 每章各自的阅读位置（bookId -> 章号 -> 进度）。
+     *
+     * 为什么单独一个文件、不塞进 progress.json：
+     * progress.json 是"这本书读到哪儿"，只有一条；逐章记忆是"每一章各停在哪"，
+     * 是另一个量级的数据（几十到上千条），格式也不同。分开存互不干扰，
+     * 老的 progress.json 读起来完全不用改。
+     */
+    private val chapterProgressFile get() = File(root, "chapter-progress.json")
+
     /** 从外部目录扫进来的书，用 "绝对路径|字节数" 记账，免得每次扫描都重复导入 */
     private val scannedFile get() = File(root, "scanned.json")
 
@@ -228,6 +238,49 @@ class LibraryStore(private val ctx: Context) {
             )
         }
         progressFile.writeText(o.toString())
+    }
+
+    /* ---------------- 逐章阅读位置 ---------------- */
+
+    /**
+     * 记下「这一章停在哪儿」。
+     *
+     * 只存 para/charStart（段号 + 段内偏移），不存页码 —— 换字号、换行距、换屏幕之后
+     * 页码会漂，段内偏移不会。跳回某章时用它精确落位。
+     */
+    fun saveChapterProgress(bookId: String, chapter: Int, para: Int, charStart: Int) {
+        if (chapter < 0 || para < 0) return
+        val all = JSONObject(runCatching {
+            if (chapterProgressFile.exists()) chapterProgressFile.readText() else "{}"
+        }.getOrDefault("{}"))
+        val book = all.optJSONObject(bookId) ?: JSONObject()
+        book.put(chapter.toString(), JSONObject()
+            .put("pa", para).put("cs", charStart)
+            .put("t", System.currentTimeMillis()))
+        all.put(bookId, book)
+        runCatching { chapterProgressFile.writeText(all.toString()) }
+    }
+
+    /** 某一章上次停在哪：返回 (段号, 段内偏移)，没记录返回 null */
+    fun chapterProgress(bookId: String, chapter: Int): Pair<Int, Int>? {
+        val all = runCatching {
+            if (!chapterProgressFile.exists()) return@runCatching null
+            JSONObject(chapterProgressFile.readText())
+        }.getOrNull() ?: return null
+        val o = all.optJSONObject(bookId)?.optJSONObject(chapter.toString()) ?: return null
+        val para = o.optInt("pa", -1)
+        if (para < 0) return null
+        return para to o.optInt("cs", 0)
+    }
+
+    /** 这本书里有哪些章留下过位置（用于目录里标出"读过"） */
+    fun chaptersWithProgress(bookId: String): Set<Int> {
+        val all = runCatching {
+            if (!chapterProgressFile.exists()) return@runCatching null
+            JSONObject(chapterProgressFile.readText())
+        }.getOrNull() ?: return emptySet()
+        val book = all.optJSONObject(bookId) ?: return emptySet()
+        return book.keys().asSequence().mapNotNull { it.toIntOrNull() }.toSet()
     }
 
     /* ---------------- 书签 ---------------- */

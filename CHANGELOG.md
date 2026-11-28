@@ -8,6 +8,25 @@
 
 ---
 
+## v1.11.3
+
+> 只修缺陷，走 patch。**这一版修的是 v1.11.2 引入的必崩 bug，请尽快升级。**
+
+### 修复（严重）
+
+- **滚动模式下翻页必定闪退**。上一版给 `ScrollBody` 的 `itemsIndexed` 加 key 时，
+  写成了带转义的字面量 `"$chapterKey-$ci"` —— Kotlin 不会插值，每一条都返回
+  同一串常量，LazyColumn 校验第二项就抛 `IllegalArgumentException: Key was already used`。
+  用户实测连崩 6 次，每次都是这条。现在改成字符串拼接
+  `chapterKey.toString() + "-" + ci`，彻底避开 `$` 转义这个坑。
+
+### 实测
+
+- 滚动模式连续滑动 28 次（跨 3 章）无崩溃，崩溃缓冲区无本应用记录。
+- 再压 20 次快速滑动，全部存活。
+- 单测全绿。
+
+---
 ## v1.11.2
 
 > 只修缺陷，走 patch。

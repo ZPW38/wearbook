@@ -52,6 +52,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberUpdatedState
@@ -99,6 +100,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 
@@ -125,6 +127,10 @@ fun ReaderScreen(
     bookmarks: List<Bookmark>,
     /** 章、页、段、段内偏移、全书进度 0~1 */
     onProgress: (Int, Int, Int, Int, Float) -> Unit,
+    /** 记下「这一章停在哪」；para 是段号、charStart 是段内偏移。切章前会为旧章补记一次。 */
+    onChapterProgress: (chapter: Int, para: Int, charStart: Int) -> Unit = { _, _, _ -> },
+    /** 查「这一章上次停在哪」；没读过返回 null */
+    chapterSpot: (chapter: Int) -> Pair<Int, Int>? = { null },
     onBack: () -> Unit,
     onMutate: (Settings.() -> Unit) -> Unit, // 改设置并立即生效
     onThemeToggle: () -> Unit,
@@ -374,6 +380,26 @@ fun ReaderScreen(
          */
         var autoTick by remember { mutableIntStateOf(0) }
 
+        // 自动翻页倒计时：剩余毫秒与总时长，用来画底部那颗进度环
+        var autoLeftMs by remember { mutableLongStateOf(0L) }
+        var autoTotalMs by remember { mutableLongStateOf(0L) }
+
+        // 朗读正在念的那一句所在的行号（-1 = 没有高亮）
+        var speakLine by remember { mutableIntStateOf(-1) }
+
+        /**
+         * 把当前章读到哪儿记下来（段号 + 段内偏移）。
+         *
+         * 只在「行表确实属于当前这一章」时才记 —— 切章瞬间 lines 还是上一章的，
+         * 拿它算出来的段号安到新章头上就错了。
+         */
+        fun rememberChapterSpot() {
+            if (laidOutChapter != chapterIdx) return
+            val idx = if (scrollMode) lineAtTop else (pages.getOrNull(pageIdx)?.start ?: 0)
+            val ln = lines.getOrNull(idx.coerceIn(0, (lines.size - 1).coerceAtLeast(0))) ?: return
+            onChapterProgress(chapterIdx, ln.paraIndex, ln.charStart)
+        }
+
         /**
          * 统一切章口 —— **所有**换章的地方都必须走这里，不要就地写 `chapterIdx++`。
          *
@@ -389,12 +415,23 @@ fun ReaderScreen(
         fun gotoChapter(n: Int) {
             val t = n.coerceIn(0, chapters.lastIndex.coerceAtLeast(0))
             if (t == chapterIdx) return
+            // 离开这一章之前，先把「停在哪儿」记到它自己名下 —— 回头跳回来能接着读
+            rememberChapterSpot()
             chapterIdx = t
             pageIdx = 0
             lineAtTop = 0
             pendingPage = null
             pendingPara = null
             pendingRestore = null
+            /*
+             * 这一章以前读过就接着上次的位置，没读过才从头开始。
+             *
+             * 只认"这一章自己的记录"，不拿全书进度顶 —— 否则从第 50 章跳回第 3 章，
+             * 会按全书百分比落在第 3 章中段，而不是第 3 章上次停的地方。
+             */
+            chapterSpot(t)?.let { (para, cs) ->
+                if (paraFitsChapter(chapters, t, para)) pendingRestore = para to cs
+            }
             if (scrollMode) scope.launch { scroller.scrollToItem(0, 0) }
         }
 
@@ -632,13 +669,56 @@ fun ReaderScreen(
             onDispose { speaker.onDone = null; speaker.stop() }
         }
         LaunchedEffect(speaking, chapterIdx, pageIdx, pages.size) {
-            if (speaking) {
-                val page = pages.getOrNull(pageIdx)
-                val text = page?.let { p ->
-                    (p.start until p.end).joinToString("") { lines[it].text }
-                } ?: ""
-                if (text.isNotBlank()) speaker.speak(text)
+            if (!speaking) {
+                speakLine = -1
+                return@LaunchedEffect
             }
+            /*
+             * 逐句朗读而不是整页一口气念。
+             *
+             * 两个好处：一是能高亮"正在念的这一句"，用户知道读到哪儿了；
+             * 二是整页几千字一次性喂给 TTS，很多引擎会在中间断掉或漏字。
+             * 按句切、念完自动接下一句，到页末再走原来的 goNext()。
+             */
+            val page = pages.getOrNull(pageIdx) ?: return@LaunchedEffect
+            val pageLines = (page.start until page.end).mapNotNull { lines.getOrNull(it) }
+            if (pageLines.isEmpty()) return@LaunchedEffect
+
+            // 按句号/问号/叹号/分号切句，保留标点；把行号一并带上用于高亮
+            val sentences = mutableListOf<Pair<Int, String>>()
+            var buf = StringBuilder()
+            var startLine = -1
+            pageLines.forEachIndexed { i, ln ->
+                if (startLine < 0) startLine = i
+                buf.append(ln.text)
+                val t = ln.text.trimEnd()
+                if (t.isNotEmpty() && t.last() in "。！？…；」』") {
+                    sentences.add(startLine to buf.toString())
+                    buf = StringBuilder(); startLine = -1
+                }
+            }
+            if (buf.isNotBlank()) {
+                val li = if (startLine >= 0) startLine else 0
+                sentences.add(li to buf.toString())
+            }
+            if (sentences.isEmpty()) return@LaunchedEffect
+
+            for ((li, sentence) in sentences) {
+                if (!speaking) break
+                speakLine = page.start + li
+                // 让 onDone 把"念完这一句"接上：用一个最简的等待，念完或超时都往下走
+                kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+                    speaker.onDone = { if (cont.isActive) cont.resumeWith(Result.success(Unit)) }
+                    speaker.speak(sentence)
+                    // 兜底：引擎没回调 onDone 时按句长估算时间，别卡死
+                    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+                        delay((sentence.length * 190L).coerceIn(1500L, 12000L))
+                        if (cont.isActive) cont.resumeWith(Result.success(Unit))
+                    }
+                }
+            }
+            speakLine = -1
+            speaker.onDone = { if (speaking) goNext() }
         }
 
         /**
@@ -652,9 +732,21 @@ fun ReaderScreen(
             val sec = settings.autoSeconds
             if (sec > 0 && !speaking) {
                 while (true) {
-                    delay(sec * 1000L)
+                    // 倒计时：每 50ms 推进一次，底部那颗环就能平滑走完一圈
+                    val total = sec * 1000L
+                    var left = total
+                    while (left > 0) {
+                        autoLeftMs = left
+                        autoTotalMs = total
+                        val step = 50L.coerceAtMost(left)
+                        delay(step)
+                        left -= step
+                    }
+                    autoLeftMs = 0
                     goNext(auto = true)
                 }
+            } else {
+                autoLeftMs = 0
             }
         }
 
@@ -678,6 +770,8 @@ fun ReaderScreen(
                 pageCount = pages.size,
                 speaking = speaking,
                 autoSeconds = settings.autoSeconds,
+                autoLeftMs = autoLeftMs,
+                autoTotalMs = autoTotalMs,
                 round = settings.roundScreen,
                 onBack = onBack,
                 onOpenToc = { panel = Panel.TOC },
@@ -1076,7 +1170,11 @@ private fun ScrollBody(
             contentPadding = PaddingValues(top = topPad, bottom = bottomPad)
         ) {
             // key 里带章号：换章 → 全部 key 失效 → 从顶部重新布局，不会继承旧滚动位置
-            itemsIndexed(chunks, key = { ci, _ -> "${'$'}chapterKey-${'$'}ci" }) { ci, chunk ->
+            // ⚠️ key 必须**真插值**。上一版这里写成了带转义的字面量，
+            // 每一块的 key 都是同一串 "$chapterKey-$ci"，LazyColumn 校验第二项就抛
+            // IllegalArgumentException: Key was already used —— 滚动模式一翻页必崩。
+            // 用字符串拼接而不是模板串，彻底避开 $ 转义这一坑。
+            itemsIndexed(chunks, key = { ci, _ -> chapterKey.toString() + "-" + ci }) { ci, chunk ->
                 val startGlobal = ci * SCROLL_CHUNK
                 var h = 0f
                 chunk.forEachIndexed { j, ln ->
@@ -1155,6 +1253,9 @@ private fun ReaderOverlay(
     pageCount: Int,
     speaking: Boolean,
     autoSeconds: Int,
+    /** 自动翻页剩余毫秒 / 总毫秒（画倒计时环） */
+    autoLeftMs: Long = 0L,
+    autoTotalMs: Long = 0L,
     /** 圆屏手表：标题居中、图标让位给文字 */
     round: Boolean,
     onBack: () -> Unit,
@@ -1298,11 +1399,15 @@ private fun ReaderOverlay(
                         tip = "搜已缓存章节，点结果跳页",
                         onClick = onSearch, onTip = onTip, tint = fgColor
                     )
-                    TextIconButton(
-                        icon = R.drawable.ic_autoplay,
-                        label = if (autoSeconds > 0) "自动${autoSeconds}s" else "自动翻页",
-                        tip = "3/5/10/20/30 秒循环，设置里可调任意值",
-                        onClick = onAutoPage, onTip = onTip, tint = fgColor
+                    // 自动翻页：开启时图标外圈带一道走完一圈就翻页的 M3 进度环，
+                    // 剩余秒数压在图标上，比原来的"自动 5s"能看出还剩多久
+                    AutoPageButton(
+                        autoSeconds = autoSeconds,
+                        leftMs = autoLeftMs,
+                        totalMs = autoTotalMs,
+                        onClick = onAutoPage,
+                        onTip = { onTip("3/5/10/20/30 秒循环，设置里可调任意值") },
+                        tint = fgColor
                     )
                     TextIconButton(
                         icon = R.drawable.ic_bookmark, label = "书签",
@@ -1385,6 +1490,85 @@ private fun RowScope.TextIconButton(
         )
     }
 }
+/**
+ * 自动翻页按钮：图标外圈一道 Material 3 进度环。
+ *
+ * 环走完一圈正好翻一页，剩余秒数压在中间 —— 不用猜"还有多久"。
+ * 关闭时就是普通图标按钮，环不出现。
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun RowScope.AutoPageButton(
+    autoSeconds: Int,
+    leftMs: Long,
+    totalMs: Long,
+    onClick: () -> Unit,
+    onTip: () -> Unit,
+    tint: androidx.compose.ui.graphics.Color
+) {
+    val on = autoSeconds > 0
+    val progress = if (on && totalMs > 0L) {
+        (leftMs.toFloat() / totalMs.toFloat()).coerceIn(0f, 1f)
+    } else 0f
+    val accent = MaterialTheme.colorScheme.primary
+
+    Column(
+        Modifier
+            .weight(1f)
+            .height(48.dp)
+            .combinedClickable(onClick = onClick, onLongClick = { onTip() }),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(26.dp)) {
+            if (on) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val stroke = 2.2.dp.toPx()
+                    val inset = stroke / 2f
+                    val arcSize = androidx.compose.ui.geometry.Size(size.width - stroke, size.height - stroke)
+                    val topLeft = androidx.compose.ui.geometry.Offset(inset, inset)
+                    drawArc(
+                        color = tint.copy(alpha = 0.22f),
+                        startAngle = -90f, sweepAngle = 360f, useCenter = false,
+                        topLeft = topLeft, size = arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    )
+                    drawArc(
+                        color = accent,
+                        startAngle = -90f, sweepAngle = 360f * progress, useCenter = false,
+                        topLeft = topLeft, size = arcSize,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(
+                            stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round
+                        )
+                    )
+                }
+                Text(
+                    text = ((leftMs + 999) / 1000).coerceAtLeast(0).toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    maxLines = 1
+                )
+            } else {
+                Icon(
+                    painter = painterResource(R.drawable.ic_autoplay),
+                    contentDescription = "自动翻页",
+                    tint = tint,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+        Text(
+            if (on) "自动" else "自动翻页",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (on) accent else tint,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
 
 /** 插图缓存上限：当前页 + 前后若干页，够翻页不卡，又不至于把内存吃穿 */
 private const val MAX_IMG_CACHE = 12

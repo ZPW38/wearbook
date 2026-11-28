@@ -97,7 +97,7 @@ android {
          * ⚠️ build-number.txt 必须提交进仓库，否则换机器构建会从旧号重来，
          *    导致 versionCode 回退 → 安卓拒绝安装「版本低于已安装版本」。
          */
-        versionName = "1.11.2"
+        versionName = "1.11.3"
         versionCode = readBuildNumber()
         resourceConfigurations += listOf("zh", "en")
         // 构建号也塞进 BuildConfig，界面和 User-Agent 都能读到

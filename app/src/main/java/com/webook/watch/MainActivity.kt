@@ -560,7 +560,13 @@ class MainActivity : ComponentActivity() {
                                     initialPara = p?.para ?: -1,
                                     initialCharStart = p?.charStart ?: 0,
                                     bookmarks = bookmarks,
+                                    onChapterProgress = { ch, pa, cs ->
+                                        store.saveChapterProgress(meta.id, ch, pa, cs)
+                                    },
+                                    chapterSpot = { ch -> store.chapterProgress(meta.id, ch) },
                                     onProgress = { c, pg, pa, cs, frac ->
+                                        // 同时在"逐章位置"里记一份：退出/切章后跳回本章能接着读
+                                        if (pa >= 0) store.saveChapterProgress(meta.id, c, pa, cs)
                                         store.saveProgress(
                                             meta.id,
                                             com.webook.watch.data.Progress(
